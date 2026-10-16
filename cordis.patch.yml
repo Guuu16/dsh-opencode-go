@@ -1,0 +1,16 @@
+# dsh-opencode-go bundle patch
+#
+# This file is the `dsh.bundle.patch` layer of the package: when the plugin is
+# installed through the Plugin Manager (or `dsh plugin add`), the installer
+# reconciles `dsh.profile.bundles` against the installed packages and, seeing
+# this declaration, appends `dsh-opencode-go` to the bundle stack. The
+# profile boot then merges this patch — a single `insert` of the plugin row —
+# so no manual `cordis.patch.yml` mount line is needed in the profile.
+#
+# The entry id doubles as the settings namespace: the host writes this row's
+# config through the settings service (revision-fenced), and the volatile
+# fields live-commit back into the running fiber without a remount. Keep the
+# id stable: renaming it orphans the persisted settings section.
+- insert:
+    - id: dsh-opencode-go
+      name: 'dsh-opencode-go'

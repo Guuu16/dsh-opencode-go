@@ -1,0 +1,69 @@
+{
+  "name": "dsh-opencode-go",
+  "version": "0.2.0",
+  "description": "DeepSeek Harness plugin: multi-key pool with automatic quota failover and a usage dashboard for the OpenCode Go plan",
+  "license": "MIT",
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "plugin",
+    "opencode",
+    "opencode-go",
+    "quota",
+    "usage",
+    "failover",
+    "api-key-pool"
+  ],
+  "type": "module",
+  "main": "./index.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "index.js",
+    "pool.js",
+    "usage.js",
+    "models.js",
+    "typert.host.js",
+    "client.js",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./typert": "./typert.host.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-api-remotes",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-locale"
+      ],
+      "platform": "web"
+    },
+    "manifestVersion": 1
+  },
+  "dependencies": {
+    "zod": "^4.0.0"
+  },
+  "peerDependencies": {
+    "react": "^18.0.0",
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/schemastery": "^3.18.1",
+    "@deepseek-ai/dsh-typert-protocol": "^0.2.0-rc.2",
+    "@deepseek-ai/dsh-credentials": "^0.2.0-rc.2",
+    "@deepseek-ai/dsh-settings": "^0.2.0-rc.2",
+    "@deepseek-ai/dsh-llm": "^0.2.0-rc.2",
+    "@deepseek-ai/dsh-llm-pi-ai": "^0.2.0-rc.2",
+    "@deepseek-ai/dsh-home-paths": "^0.2.0-rc.2",
+    "@earendil-works/pi-ai": ">=0.82.1"
+  }
+}
