@@ -139,7 +139,8 @@ function migrateHomeFile(name, legacyName) {
 // cosmokit Volatile reference ({ get(), [Symbol(cosmokit.volatile.write)] }).
 // Live commits update those references in place, so dereferencing at read time
 // always yields the current user value — the same helper shape the settings
-// service uses as `plainConfig`.const VOLATILE_WRITE = Symbol.for('cosmokit.volatile.write')
+// service uses as `plainConfig`.
+const VOLATILE_WRITE = Symbol.for('cosmokit.volatile.write')
 function toPlain(value) {
   if (typeof value === 'object' && value !== null && VOLATILE_WRITE in value) return toPlain(value.get())
   if (Array.isArray(value)) return value.map(toPlain)

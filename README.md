@@ -123,7 +123,9 @@ Authorization: Bearer <OpenCode Go API Key>
 
 - Host 半：`index.js`（插件 + 池适配器 + 接管）、`pool.js`（状态机）、`usage.js`（用量网关）、`models.js`（模型目录拉取）、`typert.host.js`（RPC 清单）
 - 浏览器半：`client.js`（lazy-CJS bundle，`window.__ModuleLoader__.load` 格式）
-- 测试：`node --test test/*.test.mjs`（48 项：状态机 13、用量网关 7、cordis 烟测 8（接管协议与静默切换端到端）、真实服务集成 5（LlmRuntime 注册表/llm.stream 全链路/settings 写入/接管握手）、客户端 bundle 执行与渲染 5、重试预算回归 10（`test/retry-budget.test.mjs`，纯状态机，无需 harness 依赖）；缺少 harness 依赖时相关测试优雅跳过）
+- 测试：`node --test test/*.test.mjs`（14 项，均不需要 harness 依赖）：
+  - `test/retry-budget.test.mjs`（10）：状态机上的重试预算与换号行为回归
+  - `test/plugin-load.test.mjs`（4）：用桩模块真实导入 `index.js` 并构造插件实例，断言路由注册、`retryBudget` 与状态落盘；另含「声明被并入注释」的静态守卫。这类测试专治「语法检查通过、启动时构造却抛错」的静默失败 —— 插件会安静地不挂载，bundle 和兼容性检查都看不出问题
 
 ```sh
 node --test test/*.test.mjs
