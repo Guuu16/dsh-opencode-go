@@ -522,6 +522,7 @@ async function cmdProvider({ flags, positional }) {
       chatPath: flags.path ?? (type === 'anthropic' ? '/v1/messages' : '/chat/completions'),
       modelsPath: flags['models-path'] ?? (type === 'anthropic' ? '/v1/models' : '/models'),
       authHeader: flags['auth-header'] ?? (type === 'anthropic' ? 'x-api-key' : 'bearer'),
+      sessionHeader: flags['session-header'] ?? null,
       anthropicVersion: '2023-06-01',
       priority: Number(flags.priority ?? 100),
       enabled: true,

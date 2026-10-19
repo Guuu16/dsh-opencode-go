@@ -7,7 +7,7 @@
  * the file entirely:  "key": "${OPENCODE_GO_KEY_A}"  or  "env:OPENCODE_GO_KEY_A".
  */
 
-import { randomBytes } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { isIPv4, isIPv6 } from 'node:net'
 import { existsSync, readFileSync } from 'node:fs'
 import { basename, dirname } from 'node:path'
@@ -203,6 +203,13 @@ function normalizeProvider(raw, index, seenIds) {
     usageUrl: raw.usageUrl === undefined || raw.usageUrl === null || raw.usageUrl === '' ? null : stringOr(raw.usageUrl, '', `${where}.usageUrl`),
     usageRefreshMs: numberIn(raw.usageRefreshMs, 60_000, 15_000, 3_600_000, `${where}.usageRefreshMs`),
     preemptAtPercent: numberIn(raw.preemptAtPercent, 100, 1, 100, `${where}.preemptAtPercent`),
+    // Some gateways refuse to route without a client-session header
+    // (OpenCode Go requires x-opencode-session). The id is generated per load
+    // and never persisted, so the config file stays stable.
+    sessionHeader: raw.sessionHeader ? stringOr(raw.sessionHeader, '', `${where}.sessionHeader`) : null,
+    sessionId: raw.sessionHeader
+      ? (typeof raw.sessionId === 'string' && raw.sessionId !== '' ? raw.sessionId : randomUUID())
+      : null,
     // Ask the upstream for a final usage chunk in streams. Turn off for
     // OpenAI-compatible servers that reject unknown request fields.
     streamUsage: raw.streamUsage !== false,
@@ -390,6 +397,7 @@ export function persistConfig(config, path = config.configPath ?? configPath()) 
       usageRefreshMs: provider.usageRefreshMs,
       preemptAtPercent: provider.preemptAtPercent,
       streamUsage: provider.streamUsage,
+      sessionHeader: provider.sessionHeader,
       headers: provider.headers,
       keys: provider.keys.map(key => ({
         id: key.id,
@@ -479,6 +487,8 @@ export function starterConfig({ adminToken }) {
         priority: 10,
         usageUrl: 'https://opencode.ai/zen/go/v1/usage',
         modelsUrl: 'https://opencode.ai/zen/go/v1/models',
+        // OpenCode Go refuses to route without a client session header.
+        sessionHeader: 'x-opencode-session',
         keys: [],
       },
       {

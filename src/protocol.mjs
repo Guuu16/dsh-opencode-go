@@ -359,6 +359,7 @@ export function canonicalToAnthropicRequest(canonical, modelId, provider = {}) {
 
 function authHeaders(provider, apiKey) {
   const headers = { ...(provider.headers ?? {}) }
+  if (provider.sessionHeader && provider.sessionId) headers[provider.sessionHeader] = provider.sessionId
   if (provider.type === 'anthropic') headers['anthropic-version'] = provider.anthropicVersion || '2023-06-01'
   if (provider.authHeader === 'bearer') headers.authorization = `Bearer ${apiKey}`
   else if (provider.authHeader === 'x-api-key') headers['x-api-key'] = apiKey

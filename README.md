@@ -83,7 +83,8 @@ curl -s http://127.0.0.1:8787/v1/chat/completions \
 aipool provider add --id opencode-go --type openai \
   --base-url https://opencode.ai/zen/go/v1 \
   --usage-url https://opencode.ai/zen/go/v1/usage \
-  --models-url https://opencode.ai/zen/go/v1/models
+  --models-url https://opencode.ai/zen/go/v1/models \
+  --session-header x-opencode-session
 aipool key add --provider opencode-go --label 账号A     # 交互式粘贴，不回显
 aipool key add --provider opencode-go --label 账号B
 
@@ -117,6 +118,8 @@ aipool provider add --id ollama --type openai \
 ---
 
 ## 客户端怎么用
+
+三种主流客户端的完整配置（Claude Code / DeepSeek Harness / ZCode）见 **[docs/clients.md](docs/clients.md)**，下面是速查。
 
 ### curl / 任何 OpenAI SDK
 
@@ -264,6 +267,7 @@ aipool doctor                                   体检：配置、Node、端口�
     "models": [{ "id": "deepseek-v4-pro", "name": "DeepSeek V4 Pro" }],
     "modelsUrl": "https://opencode.ai/zen/go/v1/models",
     "usageUrl": "https://opencode.ai/zen/go/v1/usage",
+    "sessionHeader": "x-opencode-session",   // 有些网关要求客户端会话头（OpenCode Go 必需）
     "preemptAtPercent": 100,
     "streamUsage": true,             // 流式时向上游要 usage；少数兼容服务不认 stream_options 就设 false
     "headers": {},
