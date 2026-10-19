@@ -356,7 +356,14 @@ class OpenCodeGoPoolAdapter extends LlmAdapter {
         yield finish
         return
       }
-      // Degenerate inner adapter that ended without a terminal finish.
+      // Degenerate inner adapter that ended without a terminal finish. The
+      // caller still needs exactly one terminal chunk, and the last classified
+      // failure is more useful than a generic message.
+      if (lastErrorFinish !== null) {
+        yield lastErrorFinish
+        return
+      }
+      yield dryPoolFinish('dsh-opencode-go: the provider stream ended without a finish chunk')
       return
     }
     // The bound ran out while a rotation-driven silent retry was still pending.

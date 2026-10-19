@@ -161,11 +161,16 @@ export class KeyPool {
       this.states.set(entry.id, prev ?? { state: HEALTHY, usage: null, lastFailure: null, failureStreak: 0 })
       if (this.states.get(entry.id).failureStreak === undefined) this.states.get(entry.id).failureStreak = 0
     }
+    // Keep the states of keys that are merely absent from THIS list (the
+    // settings overlay may not have arrived yet, or the user is mid-edit):
+    // dropping them here would resurrect dead accounts on the next boot.
+    this.orphans = new Map([...before].filter(([id]) => !this.states.has(id)))
     if (this.activeId !== null && !this.states.has(this.activeId)) this.activeId = null
     if (this.activeId === null || !this.isUsable(this.activeId)) {
       this.activeId = this.pickFirstUsableId()
     }
-    this.persist()
+    // An empty list is never a reason to overwrite the state file.
+    if (this.keys.length > 0) this.persist()
   }
 
   // ---- reads ---------------------------------------------------------------

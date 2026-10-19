@@ -48,27 +48,29 @@ export async function fetchUsage({ baseUrl, apiKey, timeoutMs = 15000, fetchImpl
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   let res
+  let body
   try {
     res = await impl(baseUrl, {
       headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' },
       signal: controller.signal,
     })
-  } catch {
-    throw new UsageError('network', `usage request failed: ${baseUrl}`)
+    if (res.status === 401) {
+      await res.body?.cancel?.().catch(() => {})
+      throw new UsageError('unauthorized', 'usage endpoint rejected the key (401)')
+    }
+    if (!res.ok) {
+      await res.body?.cancel?.().catch(() => {})
+      throw new UsageError(`http-${res.status}`, `usage endpoint answered HTTP ${res.status}`)
+    }
+    // Read the body INSIDE the timer window: a response whose headers arrive
+    // and whose body never does must not be able to hang status() forever.
+    body = await res.json()
+  } catch (error) {
+    if (error instanceof UsageError) throw error
+    if (res === undefined) throw new UsageError('network', `usage request failed: ${baseUrl}`)
+    throw new UsageError('bad-json', 'usage endpoint answered with non-JSON')
   } finally {
     clearTimeout(timer)
-  }
-  if (res.status === 401) {
-    throw new UsageError('unauthorized', 'usage endpoint rejected the key (401)')
-  }
-  if (!res.ok) {
-    throw new UsageError(`http-${res.status}`, `usage endpoint answered HTTP ${res.status}`)
-  }
-  let body
-  try {
-    body = await res.json()
-  } catch {
-    throw new UsageError('bad-json', 'usage endpoint answered with non-JSON')
   }
   const usage = body && typeof body === 'object' && body.usage ? body.usage : body
   return {

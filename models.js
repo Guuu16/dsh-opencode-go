@@ -65,24 +65,25 @@ export async function fetchModels({ baseUrl, apiKey, timeoutMs = 15000, fetchImp
   const headers = { Accept: 'application/json' }
   if (apiKey) headers.Authorization = `Bearer ${apiKey}`
   let res
-  try {
-    res = await impl(baseUrl, { headers, signal: controller.signal })
-  } catch {
-    throw new ModelsError('network', `models request failed: ${baseUrl}`)
-  } finally {
-    clearTimeout(timer)
-  }
-  if (res.status === 401) {
-    throw new ModelsError('unauthorized', 'models endpoint rejected the key (401)')
-  }
-  if (!res.ok) {
-    throw new ModelsError(`http-${res.status}`, `models endpoint answered HTTP ${res.status}`)
-  }
   let body
   try {
+    res = await impl(baseUrl, { headers, signal: controller.signal })
+    if (res.status === 401) {
+      await res.body?.cancel?.().catch(() => {})
+      throw new ModelsError('unauthorized', 'models endpoint rejected the key (401)')
+    }
+    if (!res.ok) {
+      await res.body?.cancel?.().catch(() => {})
+      throw new ModelsError(`http-${res.status}`, `models endpoint answered HTTP ${res.status}`)
+    }
+    // Same rule as usage.js: the timer has to cover the body read.
     body = await res.json()
-  } catch {
+  } catch (error) {
+    if (error instanceof ModelsError) throw error
+    if (res === undefined) throw new ModelsError('network', `models request failed: ${baseUrl}`)
     throw new ModelsError('bad-json', 'models endpoint answered with non-JSON')
+  } finally {
+    clearTimeout(timer)
   }
   const raw = Array.isArray(body) ? body : (body && Array.isArray(body.data) ? body.data : [])
   const models = []
