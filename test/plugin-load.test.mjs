@@ -117,11 +117,16 @@ function buildSandbox() {
 }
 
 /** Minimal Cordis context: logger, lifecycle subscription, service lookup. */
-function makeContext(events) {
+function makeContext(events, { credentials } = {}) {
   return {
     logger: { info() {}, warn() {} },
     on(event) { events.push(event); return () => {} },
-    get() { return undefined },
+    get(name) {
+      if (name === 'credentials') {
+        return credentials ?? { resolve: async () => ({ value: 'sk-test-key' }) }
+      }
+      return undefined
+    },
     llm: { registerAdapter: () => ({ replace() {} }) },
   }
 }
@@ -187,6 +192,28 @@ test('the constructor tolerates a config with no keys', async () => {
   assert.equal(plugin.pool.currentKey(), null)
   // No keys to rotate over, but the threshold still asks for 4 attempts.
   assert.equal(plugin.retryBudget(), 4)
+})
+
+test('the model catalog resolves the active pool key', async () => {
+  // Newer runtimes call resolveApiKey while listing models. It must hand back a
+  // real credential; an unconditional throw turns "list models" into a hard
+  // catalog load failure in the model picker.
+  const loaded = await loadModule()
+  const plugin = new loaded.OpenCodeGoPool(makeContext([]), makeConfig())
+  const resolveApiKey = plugin.innerCatalog.options.resolveApiKey
+  assert.equal(typeof resolveApiKey, 'function')
+  assert.equal(await resolveApiKey('opencode-go', {}), 'sk-test-key')
+})
+
+test('a pool with no usable key reports MISSING_CREDENTIAL, not a load failure', async () => {
+  // The runtime turns exactly this code into an empty model list; any other
+  // error surfaces as a broken catalog.
+  const loaded = await loadModule()
+  const plugin = new loaded.OpenCodeGoPool(makeContext([]), { ...makeConfig(), keys: [] })
+  await assert.rejects(
+    () => plugin.innerCatalog.options.resolveApiKey('opencode-go', {}),
+    (error) => error.code === 'MISSING_CREDENTIAL',
+  )
 })
 
 test('module-scope declarations are not swallowed by comments', async () => {

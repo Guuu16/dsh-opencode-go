@@ -437,8 +437,21 @@ export class OpenCodeGoPool extends TypertRemoteService {
       this.profileMap = new Map([[cfg.route, buildProfile(cfg.route, route => this.dynamicModelDescriptors(route))]])
       this.innerCatalog = new PiAiAdapter({
         profiles: () => this.profileMap,
+        // Newer runtimes resolve a key while listing models, to tell an empty
+        // catalog apart from a missing credential. Hand over the active pool
+        // key: MISSING_CREDENTIAL is the one code the runtime turns into an
+        // empty model list, everything else becomes a catalog load failure.
+        // (This used to be an unconditional throw, back when listing never
+        // resolved a key at all — that turned "list models" into a hard error.)
         resolveApiKey: async () => {
-          throw new Error('dsh-opencode-go: the catalog adapter never resolves keys')
+          const entry = this.pool?.currentKey()
+          if (!entry) {
+            throw new LlmError(
+              'dsh-opencode-go: no usable key to resolve for the model catalog — add or revive a key in Settings → OpenCode Go 套餐池',
+              'MISSING_CREDENTIAL',
+            )
+          }
+          return this.resolveKeyValue(entry)
         },
         resolveAttachments: () => this.ctx.get('attachments'),
       })
