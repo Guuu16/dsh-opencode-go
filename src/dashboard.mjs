@@ -559,10 +559,13 @@ tr.row-err td{background:rgba(255,107,107,.035)}
     head.appendChild(left);
     var right = el('div', 'p-right');
     var keyRows = Array.isArray(p.keys) ? p.keys : [];
+    var liveKeys = keyRows.filter(function (k) { return k && k.enabled !== false; }).length;
     var h = (typeof p.healthy === 'boolean') ? p.healthy : null;
-    // "no keys yet" is a setup state, not a failure: do not paint it red.
+    // "no keys yet" and "every key disabled" are setup states, not failures.
     if (!keyRows.length) {
       right.appendChild(el('span', 'pill unknown', '未配置'));
+    } else if (!liveKeys) {
+      right.appendChild(el('span', 'pill unknown', '已停用'));
     } else {
       right.appendChild(el('span', 'pill ' + (h === true ? 'healthy' : h === false ? 'down' : 'unknown'),
         h === true ? '健康' : h === false ? '异常' : '未知'));

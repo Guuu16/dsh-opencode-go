@@ -280,7 +280,20 @@ async function cmdServe({ flags }) {
   if (flags.port) config.server.port = Number(flags.port)
   if (flags.host) config.server.host = String(flags.host)
   const gateway = await createGateway({ config })
-  const { host, port } = await gateway.start()
+  let started
+  try {
+    started = await gateway.start()
+  } catch (error) {
+    if (error?.code === 'EADDRINUSE') {
+      const live = daemonInfo()
+      throw new ConfigError(
+        `端口 ${config.server.port} 已被占用${live ? `（aipool 自己已经在跑，pid ${live.pid}）` : ''}。`
+        + `换一个端口：aipool serve --port ${config.server.port + 1}；或先 aipool status 看现状`,
+      )
+    }
+    throw error
+  }
+  const { host, port } = started
   writeFileSync(pidPath(), `${JSON.stringify({ pid: process.pid, port })}\n`)
   const cleanup = () => {
     try {
