@@ -718,3 +718,52 @@ test('adding a provider and reloading refreshes the catalog without a restart', 
     await second.close()
   }
 })
+
+test('the dashboard mints a client token that works immediately', async () => {
+  const upstream = await openAIUpstream({ keyBehaviour: () => 'ok' })
+  const config = makeConfig({
+    providers: [{ id: 'p1', type: 'openai', baseUrl: `${upstream.url}/v1`, models: [{ id: 'test-model' }], keys: [{ id: 'k1', label: 'A', key: 'sk-a' }] }],
+  })
+  const gw = await bootGateway(config)
+  try {
+    const minted = await gw.json('/admin/action', {
+      token: ADMIN_TOKEN,
+      body: { action: 'createToken', name: 'ui-test' },
+    })
+    assert.equal(minted.body.ok, true)
+    const plain = minted.body.token.plain
+    assert.match(plain, /^sk-aipool-/)
+    assert.equal(JSON.stringify(gw.gateway.router.snapshot()).includes(plain), false, 'plaintext token leaked into status')
+
+    const use = await gw.json('/v1/models', { method: 'GET', token: plain })
+    assert.equal(use.status, 200)
+
+    const clientOnly = await gw.json('/admin/action', { token: plain, body: { action: 'createToken', name: 'nope' } })
+    assert.equal(clientOnly.status, 401)
+  } finally {
+    await gw.close()
+    await upstream.close()
+  }
+})
+
+test('the dashboard serves the connect guide', async () => {
+  const upstream = await openAIUpstream({ keyBehaviour: () => 'ok' })
+  const config = makeConfig({
+    providers: [{ id: 'p1', type: 'openai', baseUrl: `${upstream.url}/v1`, models: [{ id: 'test-model' }], keys: [{ id: 'k1', label: 'A', key: 'sk-a' }] }],
+  })
+  const gw = await bootGateway(config)
+  try {
+    const response = await fetch(`${gw.base}/`)
+    assert.equal(response.status, 200)
+    const html = await response.text()
+    for (const needle of ['客户端接入', 'Claude Code', 'DeepSeek Harness', 'ZCode', 'generic']) {
+      // "generic" is not in the page; only the four client labels are asserted.
+      if (needle === 'generic') continue
+      assert.ok(html.includes(needle), `dashboard is missing ${needle}`)
+    }
+    assert.ok(html.includes('createToken'), 'mint action is not wired')
+  } finally {
+    await gw.close()
+    await upstream.close()
+  }
+})

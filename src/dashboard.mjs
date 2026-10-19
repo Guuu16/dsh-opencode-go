@@ -173,6 +173,18 @@ tr.row-err td{background:rgba(255,107,107,.035)}
   .q{flex-wrap:wrap;row-gap:2px}
   .q-reset{flex:1 0 100%;padding-left:26px;text-align:right}
 }
+/* 接入指南 */
+.tabs{display:flex;gap:6px;flex-wrap:wrap;margin:2px 0 10px}
+.tab{padding:5px 10px;border:1px solid var(--line);border-radius:6px;background:#18212e;color:var(--muted);font:12px/1.4 var(--sans);cursor:pointer}
+.tab:hover{color:var(--text);border-color:#33445c}
+.tab.active{color:var(--text);border-color:var(--accent);background:#1b2636}
+.tab:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.guide-head{display:flex;gap:8px;align-items:center;justify-content:space-between;margin-bottom:6px}
+.guide pre{margin:0 0 8px;padding:12px 14px;border:1px solid var(--line);border-radius:8px;background:#0d131b;overflow:auto;font:11.5px/1.65 var(--mono);white-space:pre;max-height:360px}
+.guide .note{margin:0}
+.mint{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 12px;padding:10px 12px;border:1px solid #2a3a4f;border-radius:8px;background:#101823}
+.mint input{flex:1 1 320px;min-width:0;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:#0d131b;color:var(--text);font:12px/1.4 var(--mono)}
+.mint .warn{color:var(--amber);font-size:11px}
 @media (max-width:520px){
   .shell{padding:10px 10px 36px}
   .top-inner{padding:8px 10px}
@@ -223,6 +235,23 @@ tr.row-err td{background:rgba(255,107,107,.035)}
       </table>
     </div>
   </section>
+  <section class="card" id="connect-card">
+    <div class="card-head"><div class="p-left">
+      <div class="p-title"><h2 class="p-name">客户端接入</h2><span class="hint">复制下面的配置到对应客户端；令牌用客户端令牌，不要用管理员令牌</span></div>
+    </div>
+    <div class="p-right"><button class="btn" id="mint-token" type="button">生成客户端令牌</button></div>
+    </div>
+    <div class="card-body">
+      <div id="mint-result" class="mint" hidden>
+        <span class="dim">新令牌</span>
+        <input id="mint-value" type="text" readonly spellcheck="false" aria-label="新客户端令牌">
+        <button class="btn primary" id="mint-copy" type="button">复制</button>
+        <span class="warn">只显示这一次，关掉页面就找不回来了</span>
+      </div>
+      <div class="tabs" id="guide-tabs" role="tablist"></div>
+      <div class="guide" id="guide-body"></div>
+    </div>
+  </section>
   <section class="card" id="recent-card">
     <div class="card-head"><div class="p-left">
       <div class="p-title"><h2 class="p-name">最近请求</h2><span class="hint">最新在前，最多 50 条</span></div>
@@ -258,7 +287,7 @@ tr.row-err td{background:rgba(255,107,107,.035)}
   var TOKEN_KEY = 'aipool.token', POLL_MS = 2000, STALE_MS = 5000;
   var STATE_LABEL = { healthy: '健康', cooldown: '冷却中', exhausted: '额度用尽', invalid: '密钥失效', disabled: '已停用' };
   var STATE_CLASS = { healthy: 'healthy', cooldown: 'cooldown', exhausted: 'exhausted', invalid: 'invalid', disabled: 'disabled' };
-  var S = { token: '', data: null, lastOkAt: 0, failed: false, polling: false, queued: false, unauth: false, sig: '', probes: Object.create(null) };
+  var S = { token: '', data: null, lastOkAt: 0, failed: false, polling: false, queued: false, unauth: false, sig: '', probes: Object.create(null), guideTab: 'claude', guideSig: '', minted: '' };
   var toastTimer = 0;
   /* ---------- DOM helpers：只建节点、只写 textContent ---------- */
   function $(id) { return document.getElementById(id); }
@@ -693,6 +722,8 @@ tr.row-err td{background:rgba(255,107,107,.035)}
     }
     var v = $('version');
     if (v) v.textContent = sval(d && d.version) || '—';
+    var sig = b.dial + ':' + b.port;
+    if (S.guideSig !== sig) { S.guideSig = sig; renderGuide(); }
     updateUptime();
   }
   function renderFooter(d) {
@@ -865,6 +896,173 @@ tr.row-err td{background:rgba(255,107,107,.035)}
     });
     $('token-count').textContent = '—';
   }
+  /* ---------- 客户端接入指南 ---------- */
+  var GUIDE_TABS = [
+    { id: 'claude', label: 'Claude Code' },
+    { id: 'dsh', label: 'DeepSeek Harness' },
+    { id: 'zcode', label: 'ZCode' },
+    { id: 'openai', label: '通用 OpenAI' }
+  ];
+
+  function dialBase() {
+    var b = configBits(S.data || {});
+    return { http: 'http://' + b.dial + ':' + b.port, v1: 'http://' + b.dial + ':' + b.port + '/v1' };
+  }
+  function guideToken() { return S.minted || 'sk-aipool-…'; }
+
+  function guideText(id) {
+    var base = dialBase();
+    var token = guideToken();
+    if (id === 'claude') {
+      return [
+        '# ~/.claude/settings.json（合并进已有的 env）',
+        '{',
+        '  "env": {',
+        '    "ANTHROPIC_BASE_URL": "' + base.http + '",',
+        '    "ANTHROPIC_AUTH_TOKEN": "' + token + '",',
+        '    "ANTHROPIC_MODEL": "glm-5.3",',
+        '    "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek-v4-pro",',
+        '    "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.3",',
+        '    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-5.3-flash",',
+        '    "ANTHROPIC_SMALL_FAST_MODEL": "glm-5.3-flash",',
+        '    "CLAUDE_CODE_SUBAGENT_MODEL": "glm-5.3"',
+        '  }',
+        '}',
+        '',
+        '# opus / sonnet / haiku 三档都要映射到 /v1/models 里存在的名字，',
+        '# 否则 Claude Code 会拿 claude-sonnet-4-5 之类去请求，上游 404。'
+      ].join('\n');
+    }
+    if (id === 'dsh') {
+      return [
+        '# ~/.dsh/profiles/<profile>/cordis.patch.yml',
+        '# 在 llm-pi-ai.config.providers 下追加（与 opencode-go 同级，6 空格）：',
+        '      aipool:',
+        '        displayName: aipool (LAN)',
+        '        apiKeyEnv: AIPOOL_CLIENT_TOKEN',
+        '        api: openai-completions',
+        '        baseURL: "' + base.v1 + '"',
+        '        models:',
+        '          - id: glm-5.3',
+        '            name: GLM 5.3 (aipool)',
+        '            contextWindow: 1024000',
+        '            maxTokens: 128000',
+        '            input: [text]',
+        '',
+        '# ~/.dsh/.credentials.yaml',
+        'refs:',
+        '  AIPOOL_CLIENT_TOKEN: "' + token + '"',
+        '',
+        '# 改完重启 DSH（重启会结束当前会话）。'
+      ].join('\n');
+    }
+    if (id === 'zcode') {
+      return [
+        '# 1. 先 Cmd-Q 完全退出 ZCode（它会回写自己的配置）',
+        '# 2. 终端执行：',
+        'node ~/Documents/Jem/aipool/scripts/connect-zcode.mjs \\',
+        '  --token "' + token + '" \\',
+        '  --base ' + base.http,
+        '# 3. 重新打开 ZCode，在模型/供应商里选 “aipool (LAN)”',
+        '',
+        '# 不想用脚本就在界面里加自定义供应商：',
+        '协议      Anthropic Messages',
+        'Base URL  ' + base.http,
+        'API Key   ' + token,
+        '模型      glm-5.3, deepseek-v4-pro, glm-5.3-flash, kimi-k3'
+      ].join('\n');
+    }
+    return [
+      '# OpenAI SDK / curl',
+      'export OPENAI_BASE_URL=' + base.v1,
+      'export OPENAI_API_KEY=' + token,
+      '',
+      'curl ' + base.v1 + '/chat/completions \\',
+      '  -H "Authorization: Bearer $OPENAI_API_KEY" \\',
+      '  -H "content-type: application/json" \\',
+      '  -d \'{"model":"glm-5.3","messages":[{"role":"user","content":"hi"}]}\'',
+      '',
+      '# Cursor / Continue / opencode 等客户端填同样的 Base URL 和 Key。'
+    ].join('\n');
+  }
+
+  function copyText(text, btn) {
+    function done(ok) {
+      if (btn) {
+        var old = btn.textContent;
+        btn.textContent = ok ? '已复制' : '复制失败';
+        setTimeout(function () { btn.textContent = old; }, 1500);
+      }
+      if (!ok) toast('复制失败，请手动选中复制');
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { done(true); }, function () { done(false); });
+      return;
+    }
+    try {
+      var area = document.createElement('textarea');
+      area.value = text;
+      area.style.position = 'fixed';
+      area.style.opacity = '0';
+      document.body.appendChild(area);
+      area.select();
+      var ok = document.execCommand('copy');
+      document.body.removeChild(area);
+      done(ok);
+    } catch (e) { done(false); }
+  }
+
+  function renderGuide() {
+    var tabs = $('guide-tabs'), body = $('guide-body');
+    if (!tabs || !body) return;
+    clear(tabs);
+    clear(body);
+    var active = GUIDE_TABS[0];
+    for (var i = 0; i < GUIDE_TABS.length; i++) {
+      var tab = GUIDE_TABS[i];
+      if (tab.id === S.guideTab) active = tab;
+      (function (item) {
+        var b = el('button', 'tab' + (item.id === S.guideTab ? ' active' : ''), item.label);
+        b.type = 'button';
+        b.setAttribute('role', 'tab');
+        b.setAttribute('aria-selected', item.id === S.guideTab ? 'true' : 'false');
+        b.addEventListener('click', function () { S.guideTab = item.id; renderGuide(); });
+        tabs.appendChild(b);
+      })(tab);
+    }
+    var text = guideText(active.id);
+    var headBox = el('div', 'guide-head');
+    headBox.appendChild(el('div', 'foot-label', active.label + ' 配置'));
+    var copyBtn = button('复制', 'primary', function () { copyText(text, copyBtn); });
+    headBox.appendChild(copyBtn);
+    body.appendChild(headBox);
+    body.appendChild(el('pre', 'mono', text));
+    body.appendChild(el('p', 'note', 'Base URL 用的是当前浏览器访问的地址：从别的设备打开本页时，这里自动变成那台设备能访问到的地址。令牌可以在上方「客户端令牌」里停用。'));
+  }
+
+  function wireMint() {
+    var mint = $('mint-token');
+    if (!mint) return;
+    mint.addEventListener('click', function () {
+      mint.disabled = true;
+      var stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+      postAction({ action: 'createToken', name: 'ui-' + stamp }).then(function (j) {
+        if (j && j.ok && j.token && j.token.plain) {
+          S.minted = j.token.plain;
+          $('mint-value').value = S.minted;
+          $('mint-result').hidden = false;
+          renderGuide();
+          toast('已生成 ' + j.token.id + '，只显示这一次');
+          refreshSoon();
+        } else {
+          toast((j && j.error) || '生成失败');
+        }
+      }).then(function () { mint.disabled = false; });
+    });
+    var copy = $('mint-copy');
+    if (copy) copy.addEventListener('click', function () { copyText($('mint-value').value, copy); });
+  }
+
   /* ---------- 启动 ---------- */
   function boot() {
     S.token = readToken();
@@ -890,6 +1088,8 @@ tr.row-err td{background:rgba(255,107,107,.035)}
     tick();
     renderCounters({});
     renderIdle();
+    wireMint();
+    renderGuide();
 
     if (S.token) poll();
     else {

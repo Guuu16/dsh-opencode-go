@@ -18,6 +18,16 @@ aipool token new --name zcode
 
 ---
 
+## 面板里直接抄
+
+打开 `http://<host>:8790/?token=<admin token>`，滚到 **「客户端接入」**：
+
+- 四个标签页：Claude Code / DeepSeek Harness / ZCode / 通用 OpenAI，内容按当前访问地址自动生成
+- 每段配置右上角有「复制」
+- 「生成客户端令牌」会现场签发一个 `sk-aipool-…`（只显示这一次），签完指南里的 token 自动替换成它
+
+![接入指南](dashboard-connect.png)
+
 ## 1. Claude Code（本机已配置并通过实测）
 
 Claude Code 读 `~/.claude/settings.json` 的 `env`。改完这些就行：

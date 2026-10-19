@@ -8,7 +8,7 @@
 import { createServer } from 'node:http'
 import { hostname } from 'node:os'
 import { Router, UsagePoller } from './router.mjs'
-import { persistConfig } from './config.mjs'
+import { createClientToken, persistConfig } from './config.mjs'
 import {
   GatewayError,
   compileAllowList,
@@ -471,6 +471,21 @@ export async function createGateway({ config, log: logger = log, restoreState = 
       } catch (error) {
         return sendJSON(res, 200, { ok: false, status: 0, ms: Date.now() - started, model, error: error.message })
       }
+    }
+
+    if (action === 'createToken') {
+      const name = typeof body.name === 'string' && body.name.trim()
+        ? body.name.trim().slice(0, 60)
+        : `client-${Date.now()}`
+      const rpm = Number.isFinite(body.rpm) && body.rpm > 0 ? Math.floor(body.rpm) : null
+      const models = Array.isArray(body.models)
+        ? body.models.filter(item => typeof item === 'string' && item.trim() !== '').map(item => item.trim())
+        : null
+      const { plain, record } = createClientToken(config, { name, rpm, models: models && models.length ? models : null })
+      persistConfig(config)
+      // Only the digest is ever stored; this response is the one and only
+      // chance to see the plaintext.
+      return sendJSON(res, 200, { ok: true, token: { id: record.id, name: record.name, plain } })
     }
 
     if (action === 'refreshCatalog') {

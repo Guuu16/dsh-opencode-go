@@ -121,6 +121,10 @@ aipool provider add --id ollama --type openai \
 
 三种主流客户端的完整配置（Claude Code / DeepSeek Harness / ZCode）见 **[docs/clients.md](docs/clients.md)**，下面是速查。
 
+面板里的 **「客户端接入」** 卡片把这些配置都写好了，直接按当前地址生成、带复制按钮，还能一键生成客户端令牌（只显示一次）：
+
+![面板里的接入指南](docs/dashboard-connect.png)
+
 ### curl / 任何 OpenAI SDK
 
 ```bash
