@@ -123,9 +123,10 @@ Authorization: Bearer <OpenCode Go API Key>
 
 - Host 半：`index.js`（插件 + 池适配器 + 接管）、`pool.js`（状态机）、`usage.js`（用量网关）、`models.js`（模型目录拉取）、`typert.host.js`（RPC 清单）
 - 浏览器半：`client.js`（lazy-CJS bundle，`window.__ModuleLoader__.load` 格式）
-- 测试：`node --test test/*.test.mjs`（14 项，均不需要 harness 依赖）：
+- 测试：`node --test test/*.test.mjs`（22 项，均不需要 harness 依赖）：
   - `test/retry-budget.test.mjs`（10）：状态机上的重试预算与换号行为回归
-  - `test/plugin-load.test.mjs`（4）：用桩模块真实导入 `index.js` 并构造插件实例，断言路由注册、`retryBudget` 与状态落盘；另含「声明被并入注释」的静态守卫。这类测试专治「语法检查通过、启动时构造却抛错」的静默失败 —— 插件会安静地不挂载，bundle 和兼容性检查都看不出问题
+  - `test/plugin-load.test.mjs`（8）：用桩模块真实导入 `index.js` 并构造插件实例，断言路由注册、`retryBudget` 与状态落盘；另含「声明被并入注释」「空自定义模型列表」「坏 Key 不中断构造」等守卫。这类测试专治「语法检查通过、启动时构造却抛错」的静默失败 —— 插件会安静地不挂载，bundle 和兼容性检查都看不出问题
+  - `test/pool-usage.test.mjs`（4）：月度窗口的避让/复活，以及「仅用量更新不写盘」
 
 ```sh
 node --test test/*.test.mjs
@@ -137,13 +138,30 @@ node --test test/*.test.mjs
 - 全池耗尽时对话会收到明确的额度错误，卡片会全红显示；5h 窗口重置后自动恢复。
 - 每 Key 每次静默重试会重复计费输入 token（额度失败本身不计费）；单次请求的请求数上限为 `2 × (Key 数 × 阈值 + 1)`，即一整轮扫描封顶，不会随池大小平方增长。
 
+## 变更记录
+
+### 0.2.3
+
+- 合并 `fix/pool-state-and-timeouts` 的 3 个 P0：额度/模型请求的 body 读取也纳入超时、空 Key 列表不再清空已持久化的状态、内层流缺少终止 chunk 时补发 finish。
+- 修复：`modelMode=custom` 且模型列表为空时反而暴露全部模型。
+- 修复：月度额度未参与主动避让与自动复活（只检查 5h/每周）。
+- 修复：新增 Key 的 id 在极端情况下重复（同毫秒）。
+- 修复：配置里一个坏 Key 会导致插件静默不挂载；现在只告警并保留旧列表。
+- 修复：导航图标的 CSS 可能把自己的图标一起隐藏。
+- 修复：横幅显示内部 id 而不是账号名；重置过期显示「已重置」。
+- 修复：额度轮询每 Key 都重写状态文件；仅用量变化不再落盘。
+- 修复：路由被占用后不再重试接管（`servingRoute` 非空但目标已变）。
+- 新增 6 项回归测试（共 22 项）。
+
+完整分析见 [BUG-REPORT.md](./BUG-REPORT.md)。
+
 ## 许可证
 
 MIT
 
 ## 验证记录（无 GUI 真实启动）
 
-除 38 项测试外，插件已在真实 DSH host 中完成无 GUI 启动验证（dsh CLI + 一次性测试 profile）：
+除 22 项测试外，插件已在真实 DSH host 中完成无 GUI 启动验证（dsh CLI + 一次性测试 profile）：
 
 ```sh
 DSH_HOME=/tmp/dsh-boot-test/home \

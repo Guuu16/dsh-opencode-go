@@ -231,3 +231,31 @@ test('module-scope declarations are not swallowed by comments', async () => {
     )
   }
 })
+
+test('a custom model selection with no ids exposes no models', async () => {
+  // Regression: `custom` + empty list used to read as "all models", silently
+  // re-enabling every model the user had unchecked (and contradicting the
+  // card's own "no model selected" message).
+  const loaded = await loadModule()
+  const plugin = new loaded.OpenCodeGoPool(makeContext([]), {
+    ...makeConfig(),
+    modelMode: 'custom',
+    models: [],
+  })
+  const selection = plugin.modelSelection()
+  assert.ok(selection instanceof Set, 'a custom selection must not collapse to null (= all)')
+  assert.equal(selection.size, 0)
+})
+
+test('a malformed key entry is reported but never aborts construction', async () => {
+  // DSH only logs a constructor throw: a hand-edited yml with one bad key used
+  // to make the whole plugin silently never mount.
+  const loaded = await loadModule()
+  const events = []
+  const plugin = new loaded.OpenCodeGoPool(makeContext(events), {
+    ...makeConfig(),
+    keys: [{ id: 'BAD ID', label: '', apiKeyEnv: '' }],
+  })
+  assert.equal(plugin.pool.keyCount(), 0)
+  assert.equal(plugin.servingRoute, 'opencode-go')
+})

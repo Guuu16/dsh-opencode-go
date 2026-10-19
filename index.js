@@ -426,7 +426,10 @@ export class OpenCodeGoPool extends TypertRemoteService {
       this.applyConfig()
     })
     this.offAdaptersUpdated = ctx.on('llm/adapters-updated', () => {
-      if (this.servingRoute === null) this.tryRegister()
+      // Retry while the wanted route is not the one being served: a failed
+      // takeover (route held by another plugin) and a later route switch both
+      // recover as soon as a topology commit frees it.
+      if (this.servingRoute !== this.current().route) this.tryRegister()
     })
     this.tryRegister()
   }
@@ -437,7 +440,14 @@ export class OpenCodeGoPool extends TypertRemoteService {
     const cfg = this.current()
     this.pool.setPreempt(cfg.preemptAtPercent)
     this.pool.setConsecutiveThreshold(cfg.switchAfterConsecutiveFailures)
-    this.pool.syncKeys(cfg.keys)
+    try {
+      this.pool.syncKeys(cfg.keys)
+    } catch (error) {
+      // A hand-edited yml with a malformed key must not take the whole plugin
+      // down at construction time (DSH only logs the throw, so the plugin
+      // would silently never mount). Keep the previous key list and report it.
+      this.logger?.warn?.(`[dsh-opencode-go] ignoring invalid keys config: ${String((error && error.message) || error)}`)
+    }
 
     if (this.profileRoute !== cfg.route) {
       this.profileRoute = cfg.route
@@ -506,12 +516,14 @@ export class OpenCodeGoPool extends TypertRemoteService {
 
   /**
    * The enabled-model filter: null = the whole catalog, otherwise the Set of
-   * explicitly selected ids. Tolerates undefined fields from pre-feature
-   * settings documents.
+   * explicitly selected ids. A custom selection with no ids exposes NOTHING —
+   * it must never fall back to "all models", or a stale/hand-edited settings
+   * document would silently re-enable every model the user unchecked.
    */
   modelSelection() {
     const cfg = this.current()
-    if (cfg.modelMode !== 'custom' || !Array.isArray(cfg.models) || cfg.models.length === 0) return null
+    if (cfg.modelMode !== 'custom') return null
+    if (!Array.isArray(cfg.models)) return new Set()
     return new Set(cfg.models)
   }
 

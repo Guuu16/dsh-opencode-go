@@ -194,9 +194,10 @@ export class KeyPool {
     const st = this.states.get(id)
     if (st.state !== HEALTHY) return false
     if (this.preemptAtPercent < 100 && st.usage) {
-      // Preempt on EITHER window: a key whose 5h rolling window OR weekly
-      // window already reached the threshold gets skipped before it fails.
-      for (const window of [st.usage.rolling, st.usage.weekly]) {
+      // Preempt on any window: the 5h rolling, weekly and monthly quotas are
+      // independent, so a key whose monthly quota is gone must be skipped even
+      // when its 5h window just reset.
+      for (const window of [st.usage.rolling, st.usage.weekly, st.usage.monthly]) {
         if (window && typeof window.percent === 'number'
             && window.percent >= this.preemptAtPercent) {
           return false
@@ -347,23 +348,38 @@ export class KeyPool {
 
   /**
    * Feed fresh usage facts from the official endpoint. Also revives an
-   * exhausted key once its rolling window reports ok and below threshold —
-   * the endpoint is the authority, never a timer guess.
+   * exhausted key once every window reports ok and below threshold — the
+   * endpoint is the authority, never a timer guess. Usage-only updates are
+   * kept in memory: the card polls them every 30s, so persisting each poll
+   * wrote the same file once per key per tick for no benefit.
    */
   onUsage(id, usage) {
     if (!this.states.has(id)) return
     const st = this.states.get(id)
     st.usage = usage ?? null
-    if (st.state === EXHAUSTED
-        && usage && usage.rolling
-        && usage.rolling.status === 'ok'
-        && typeof usage.rolling.percent === 'number'
-        && usage.rolling.percent < this.reviveThresholdPercent) {
+    if (st.state === EXHAUSTED && usage && this.recovered(usage)) {
       st.state = HEALTHY
       st.lastFailure = null
       if (this.activeId === null) this.activeId = this.pickFirstUsableId()
+      this.persist()
     }
-    this.persist()
+  }
+
+  /**
+   * True when every reported window is ok and below the revival threshold.
+   * All three quotas are independent: reviving on the rolling window alone
+   * selected keys whose weekly/monthly window was still exhausted.
+   */
+  recovered(usage) {
+    let sawWindow = false
+    for (const name of ['rolling', 'weekly', 'monthly']) {
+      const window = usage[name]
+      if (!window) continue
+      sawWindow = true
+      if (window.status === 'quota' || window.status === 'error') return false
+      if (typeof window.percent === 'number' && window.percent >= this.reviveThresholdPercent) return false
+    }
+    return sawWindow
   }
 
   // ---- durability ----------------------------------------------------------

@@ -42,6 +42,7 @@ window.__ModuleLoader__.load({
       used: '已用',
       left: '剩余',
       resetsIn: '重置',
+      resetDone: '已重置',
       credentialRef: '凭据引用',
       noApiKey: '未配置凭据，等待填写',
       unauthorized: 'Key 无效或已过期（401）',
@@ -136,6 +137,7 @@ window.__ModuleLoader__.load({
       used: 'used',
       left: 'left',
       resetsIn: 'resets',
+      resetDone: 'reset',
       credentialRef: 'credential ref',
       noApiKey: 'credential not set yet',
       unauthorized: 'key rejected (401)',
@@ -325,7 +327,7 @@ window.__ModuleLoader__.load({
       const target = new Date(resetsAt).getTime();
       if (Number.isNaN(target)) return resetsAt;
       const diff = target - tick;
-      if (diff <= 0) return t('unknown');
+      if (diff <= 0) return t('resetDone');
       const totalMin = Math.floor(diff / 60000);
       if (totalMin < 60 * 24) {
         const h = Math.floor(totalMin / 60);
@@ -446,7 +448,9 @@ window.__ModuleLoader__.load({
         setDraft(prev => prev.filter((_, i) => i !== index));
       };
       const add = () => {
-        setDraft(prev => [...prev, { id: 'key-' + Date.now().toString(36), label: '', apiKeyEnv: '', secret: '' }]);
+        // Date.now() alone collides when two rows are added in the same
+        // millisecond; the pool then rejects the duplicate id on save.
+        setDraft(prev => [...prev, { id: 'key-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), label: '', apiKeyEnv: '', secret: '' }]);
       };
       const save = () => {
         const rows = draft.map(row => ({
@@ -839,6 +843,13 @@ window.__ModuleLoader__.load({
 
       const takeover = data ? data.takeover : null;
       const keys = Array.isArray(data && data.keys) ? data.keys : [];
+      // Ids are opaque; the banner used to print them where users expect the
+      // display name they typed.
+      const labelOf = (id) => {
+        if (!id) return '—';
+        const hit = keys.find(key => key.id === id);
+        return hit ? hit.label : id;
+      };
 
       return React.createElement('div', { style: styles.wrap },
         React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 10 } },
@@ -872,10 +883,10 @@ window.__ModuleLoader__.load({
                 : null,
               data.activeId
                 ? React.createElement('p', { style: styles.hint },
-                    `${t('activeBanner')}: ${data.activeId} · ${t('preemptNote')}: ${data.preemptAtPercent >= 100 ? t('preemptOff') : data.preemptAtPercent + '%'} · ${t('consecNote')}: ${data.switchAfterConsecutiveFailures > 0 ? data.switchAfterConsecutiveFailures : t('preemptOff')}`)
+                    `${t('activeBanner')}: ${labelOf(data.activeId)} · ${t('preemptNote')}: ${data.preemptAtPercent >= 100 ? t('preemptOff') : data.preemptAtPercent + '%'} · ${t('consecNote')}: ${data.switchAfterConsecutiveFailures > 0 ? data.switchAfterConsecutiveFailures : t('preemptOff')}`)
                 : null,
               data.lastSwitch
-                ? React.createElement('p', { style: styles.hint }, `${t('lastSwitch')}: ${data.lastSwitch.from ?? '—'} → ${data.lastSwitch.to ?? '—'} (${data.lastSwitch.reason === 'quota' ? t('switchQuota') : data.lastSwitch.reason === 'invalid' ? t('switchInvalid') : data.lastSwitch.reason === 'consecutive' ? t('switchConsecutive') : t('switchManual')}) @ ${new Date(data.lastSwitch.at).toLocaleString()}`)
+                ? React.createElement('p', { style: styles.hint }, `${t('lastSwitch')}: ${labelOf(data.lastSwitch.from)} → ${labelOf(data.lastSwitch.to)} (${data.lastSwitch.reason === 'quota' ? t('switchQuota') : data.lastSwitch.reason === 'invalid' ? t('switchInvalid') : data.lastSwitch.reason === 'consecutive' ? t('switchConsecutive') : t('switchManual')}) @ ${new Date(data.lastSwitch.at).toLocaleString()}`)
                 : null,
               keys.length > 0 && data.activeId === null
                 ? React.createElement('p', { style: styles.error }, t('noKeysHint'))
@@ -966,8 +977,10 @@ window.__ModuleLoader__.load({
       if (document.getElementById('dsh-ogp-nav-style')) return;
       const style = document.createElement('style');
       style.id = 'dsh-ogp-nav-style';
-      // Hide the shell's default gear icon on our nav row only.
-      style.textContent = 'button:has(.dsh-ogp-nav-mark) > svg { display: none; }';
+      // Hide the shell's default gear icon on our nav row only. The :not()
+      // guard matters: our own sparkle mark is also a direct <svg> child when
+      // the shell renders the label inline, and a bare `> svg` hid it too.
+      style.textContent = 'button:has(.dsh-ogp-nav-mark) > svg:not(.dsh-ogp-nav-mark) { display: none; }';
       document.head.appendChild(style);
     }
 
