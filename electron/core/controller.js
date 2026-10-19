@@ -327,6 +327,33 @@ export class Controller extends EventEmitter {
     }
   }
 
+  // ---- models --------------------------------------------------------------
+
+  /**
+   * Live model catalog from OpenCode. Prefer the local gateway (it injects the
+   * active key and session header); fall back to the upstream endpoint with the
+   * active secret when the proxy is off. IDs only — protocol is inferred in the
+   * renderer, because the endpoint does not publish per-model API metadata.
+   */
+  async listModels() {
+    const active = this.pool.current()
+    if (!active && !this.proxyInfo.running) return { models: [], fetchedAt: null, source: 'none' }
+    const url = this.proxyInfo.running
+      ? `http://${this.proxyInfo.host}:${this.proxyInfo.port}/inference/go/v1/models`
+      : 'https://opencode.ai/inference/go/v1/models'
+    const headers = { Accept: 'application/json' }
+    if (!this.proxyInfo.running) headers.Authorization = `Bearer ${this.store.secretOf(active.id)}`
+    const response = await fetch(url, { headers, signal: AbortSignal.timeout(15000) })
+    if (!response.ok) throw new Error(`models endpoint answered HTTP ${response.status}`)
+    const body = await response.json()
+    const list = Array.isArray(body) ? body : (Array.isArray(body?.data) ? body.data : [])
+    return {
+      models: list.filter(item => item && typeof item.id === 'string').map(item => ({ id: item.id, created: item.created ?? null })),
+      fetchedAt: new Date(this.now()).toISOString(),
+      source: this.proxyInfo.running ? 'gateway' : 'upstream',
+    }
+  }
+
   // ---- proxy ---------------------------------------------------------------
 
   proxyStatus() {

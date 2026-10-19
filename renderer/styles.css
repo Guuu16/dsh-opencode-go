@@ -468,6 +468,18 @@ body {
 .model-item .copy-hint { opacity: 0; font-size: 10px; color: var(--text-3); }
 .model-item:hover .copy-hint { opacity: 1; }
 
+.model-tag {
+  margin-left: auto;
+  margin-right: 6px;
+  font-size: 10px;
+  line-height: 1.5;
+  padding: 0 6px;
+  border-radius: 999px;
+  color: var(--warn);
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--border));
+  white-space: nowrap;
+}
+
 .row { display: flex; gap: 8px; flex-wrap: wrap; }
 
 .field { display: flex; flex-direction: column; gap: 6px; }

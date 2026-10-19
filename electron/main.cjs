@@ -289,6 +289,7 @@ function registerIpc() {
     return settings
   })
   handle('usage:refresh', () => controller.refreshUsage())
+  handle('models:list', () => controller.listModels())
   handle('proxy:toggle', () => controller.toggleProxy())
   handle('logs:clear', () => {
     controller.logs = []

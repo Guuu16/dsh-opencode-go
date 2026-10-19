@@ -29,6 +29,7 @@ contextBridge.exposeInMainWorld('pool', {
 
   updateSettings: patch => invoke('settings:update', patch),
   refreshUsage: () => invoke('usage:refresh'),
+  listModels: () => invoke('models:list'),
   toggleProxy: () => invoke('proxy:toggle'),
   clearLogs: () => invoke('logs:clear'),
 

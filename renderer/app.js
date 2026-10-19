@@ -94,33 +94,55 @@ const USAGE_ERROR_TEXT = {
   'bad-json': '额度接口响应无法解析',
 }
 
-// OpenCode Go 的模型按上游协议分组（pi-ai 1.3.0 目录）。
-// 配错协议会得到上游 400，所以这里按协议分开展示。
-const MODEL_CATALOG = {
-  openai: {
-    note: 'OpenAI Chat 组：兼容性最好，DSH / ZCode / Cherry Studio 等「OpenAI 兼容」供应商填 http://127.0.0.1:8787/openai/v1。',
-    models: [
-      'deepseek-v4-pro', 'deepseek-v4.1-flash', 'glm-5.3', 'glm-5.3-flash', 'glm-5.2',
-      'kimi-k3', 'kimi-k2.7-code', 'longcat-2.0', 'longcat-2.5-preview-free',
-      'mimo-v2.5', 'mimo-v2.5-pro', 'mimo-v2.6-flash', 'mimo-v2.6-pro',
-      'hy3', 'hy4-preview', 'step-5-preview-free', 'cat-jam-free', 'space-bunny',
-    ],
-  },
-  responses: {
-    note: 'OpenAI Responses 组：给 Codex CLI（wire_api = responses）用，Base URL 同上 /openai/v1。GPT / Grok / Muse 在部分地区会 403。',
-    models: ['gpt-6-luna', 'gpt-5.6-luna', 'grok-4.7', 'muse-spark-1.3-contributor', 'muse-spark-1.2-contributor'],
-  },
-  anthropic: {
-    note: 'Anthropic Messages 组：Claude Code / ZCode 的 Anthropic 供应商填 http://127.0.0.1:8787/anthropic。',
-    models: ['claude-haiku-5-5', 'qwen3.8-max', 'qwen3.8-flash', 'qwen3.7-plus', 'minimax-m3'],
-  },
-  google: {
-    note: 'Google Generative AI 组：ZCode / Google SDK 填 http://127.0.0.1:8787/google。需先在 OpenCode 工作区允许「训练数据的付费端点」。',
-    models: ['gemini-4-argon-contributor'],
-  },
+// OpenCode Go 的模型按上游协议分组。上游 /models 只给 id，不给协议，
+// 所以老模型用 pi-ai 的权威目录，新模型按名字推断并标「推断」。
+const MODEL_PROTOCOL = {
+  'deepseek-v4-pro': 'openai', 'deepseek-v4.1-flash': 'openai',
+  'glm-5.3': 'openai', 'glm-5.3-flash': 'openai', 'glm-5.2': 'openai',
+  'kimi-k3': 'openai', 'kimi-k2.7-code': 'openai',
+  'longcat-2.0': 'openai', 'longcat-2.5-preview-free': 'openai',
+  'mimo-v2.5': 'openai', 'mimo-v2.5-pro': 'openai', 'mimo-v2.6-flash': 'openai', 'mimo-v2.6-pro': 'openai',
+  'hy3': 'openai', 'hy4-preview': 'openai', 'step-5-preview-free': 'openai',
+  'cat-jam-free': 'openai', 'space-bunny': 'openai',
+  'gpt-6-luna': 'responses', 'gpt-5.6-luna': 'responses', 'grok-4.7': 'responses',
+  'muse-spark-1.3-contributor': 'responses', 'muse-spark-1.2-contributor': 'responses',
+  'claude-haiku-5-5': 'anthropic', 'qwen3.8-max': 'anthropic', 'qwen3.8-flash': 'anthropic',
+  'qwen3.7-plus': 'anthropic', 'minimax-m3': 'anthropic',
+  'gemini-4-argon-contributor': 'google',
+}
+
+const PROTOCOL_ORDER = ['openai', 'responses', 'anthropic', 'google']
+const PROTOCOL_LABEL = { openai: 'OpenAI', responses: 'Responses', anthropic: 'Anthropic', google: 'Google' }
+const PROTOCOL_NOTE = {
+  openai: 'OpenAI Chat：兼容性最好，DSH / ZCode / Cherry Studio 等「OpenAI 兼容」供应商填 /openai/v1。',
+  responses: 'OpenAI Responses：Codex CLI（wire_api = responses）用，Base URL 同上 /openai/v1。',
+  anthropic: 'Anthropic Messages：Claude Code / ZCode 的 Anthropic 供应商填 /anthropic。',
+  google: 'Google Generative AI：ZCode / Google SDK 填 /google。需先允许「训练数据的付费端点」。',
 }
 
 let activeProto = 'openai'
+let liveModelIds = null
+let liveFetchedAt = null
+let modelSyncError = null
+
+function protocolOf(id) {
+  const known = MODEL_PROTOCOL[id]
+  if (known) return { protocol: known, inferred: false }
+  if (/^gemini/i.test(id)) return { protocol: 'google', inferred: true }
+  if (/^(claude|qwen|minimax)/i.test(id)) return { protocol: 'anthropic', inferred: true }
+  if (/^(gpt|grok|muse-spark)/i.test(id)) return { protocol: 'responses', inferred: true }
+  return { protocol: 'openai', inferred: true }
+}
+
+function modelGroups() {
+  const ids = liveModelIds && liveModelIds.length > 0 ? liveModelIds : Object.keys(MODEL_PROTOCOL)
+  const groups = { openai: [], responses: [], anthropic: [], google: [] }
+  for (const id of ids) {
+    const { protocol, inferred } = protocolOf(id)
+    groups[protocol].push({ id, inferred })
+  }
+  return groups
+}
 
 function usageErrorText(code) {
   if (!code) return ''
@@ -318,24 +340,69 @@ function renderLogs() {
 }
 
 function renderModels() {
-  const group = MODEL_CATALOG[activeProto]
-  if (!group) return
-  for (const chip of document.querySelectorAll('#proto-tabs .chip')) {
-    chip.classList.toggle('active', chip.dataset.proto === activeProto)
+  const groups = modelGroups()
+  const total = PROTOCOL_ORDER.reduce((sum, protocol) => sum + groups[protocol].length, 0)
+  $('#model-count').textContent = String(total)
+
+  if (groups[activeProto].length === 0) {
+    activeProto = PROTOCOL_ORDER.find(protocol => groups[protocol].length > 0) || 'openai'
   }
+
+  const tabs = $('#proto-tabs')
+  clear(tabs)
+  for (const protocol of PROTOCOL_ORDER) {
+    tabs.append(h('button', {
+      class: `chip ${protocol === activeProto ? 'active' : ''}`,
+      dataset: { proto: protocol },
+    }, `${PROTOCOL_LABEL[protocol]} ${groups[protocol].length}`))
+  }
+
   const list = $('#model-list')
   clear(list)
-  for (const id of group.models) {
+  for (const item of groups[activeProto]) {
     list.append(h('div', {
       class: 'model-item',
-      dataset: { model: id },
+      dataset: { model: item.id },
       title: '点击复制模型 ID',
     },
-      h('span', { class: 'model-id' }, id),
+      h('span', { class: 'model-id' }, item.id),
+      item.inferred ? h('span', { class: 'model-tag' }, '推断') : null,
       h('span', { class: 'copy-hint' }, '复制'),
     ))
   }
-  $('#model-note').textContent = group.note
+
+  const inferred = PROTOCOL_ORDER.reduce((sum, protocol) => sum + groups[protocol].filter(item => item.inferred).length, 0)
+  const parts = [PROTOCOL_NOTE[activeProto]]
+  if (liveFetchedAt) parts.push(`同步于 ${fmtClock(liveFetchedAt)}`)
+  else if (modelSyncError) parts.push(`同步失败：${modelSyncError}`)
+  if (inferred > 0) parts.push(`${inferred} 个新模型按名称推断协议`)
+  $('#model-note').textContent = parts.join(' · ')
+}
+
+async function refreshModelCatalog() {
+  const button = $('#refresh-models')
+  if (!button || !api) return
+  const label = button.textContent
+  button.disabled = true
+  button.textContent = '同步中…'
+  try {
+    const result = await api.listModels()
+    if (result && Array.isArray(result.models) && result.models.length > 0) {
+      liveModelIds = result.models.map(model => model.id)
+      liveFetchedAt = result.fetchedAt || new Date().toISOString()
+      modelSyncError = null
+    } else {
+      modelSyncError = '没有拿到模型列表'
+    }
+    renderModels()
+  } catch (error) {
+    modelSyncError = String((error && error.message) || error)
+    renderModels()
+    toast(`模型同步失败：${modelSyncError}`, 'err')
+  } finally {
+    button.disabled = false
+    button.textContent = label
+  }
 }
 
 function render() {
@@ -537,6 +604,8 @@ function setupEvents() {
     renderModels()
   })
 
+  $('#refresh-models').addEventListener('click', refreshModelCatalog)
+
   $('#model-list').addEventListener('click', async event => {
     const item = event.target.closest('.model-item')
     if (!item) return
@@ -584,6 +653,8 @@ async function boot() {
   }
   setupEvents()
   renderModels()
+  refreshModelCatalog()
+  setInterval(refreshModelCatalog, 6 * 60 * 60 * 1000)
   try {
     state = await api.state()
     render()
@@ -593,8 +664,10 @@ async function boot() {
     fail(error)
   }
   api.onState(snapshot => {
+    const proxyCameUp = snapshot.proxy.running && !(state && state.proxy.running)
     state = snapshot
     render()
+    if (proxyCameUp) refreshModelCatalog()
   })
   api.onLog(entry => {
     if (!state) return

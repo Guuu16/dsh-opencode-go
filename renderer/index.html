@@ -80,17 +80,15 @@
         <section class="card" id="models-card">
           <div class="card-head">
             <h3>模型与协议</h3>
-            <span class="tag">29</span>
+            <div class="row">
+              <span id="model-count" class="tag">—</span>
+              <button id="refresh-models" class="btn tiny ghost">同步</button>
+            </div>
           </div>
-          <p class="hint">同一网关、四种协议。按上面对应的 Base URL 配置客户端；点模型名可复制 ID。</p>
-          <div class="proto-tabs" id="proto-tabs">
-            <button class="chip active" data-proto="openai">OpenAI 18</button>
-            <button class="chip" data-proto="responses">Responses 5</button>
-            <button class="chip" data-proto="anthropic">Anthropic 5</button>
-            <button class="chip" data-proto="google">Google 1</button>
-          </div>
+          <p class="hint">启动时自动从官方 <code>/models</code> 同步；新模型的协议按名称推断，已打「推断」标签。</p>
+          <div class="proto-tabs" id="proto-tabs"></div>
           <div id="model-list" class="model-list"></div>
-          <p class="hint" id="model-note">OpenAI Chat 组：兼容性最好，多数客户端都能直接用。</p>
+          <p class="hint" id="model-note">正在同步模型目录…</p>
         </section>
 
         <section class="card" id="settings-card">
