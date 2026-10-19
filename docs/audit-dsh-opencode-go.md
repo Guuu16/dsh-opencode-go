@@ -139,6 +139,12 @@ yield dryPoolFinish('dsh-opencode-go: provider stream ended without a finish chu
 
 ---
 
+## 后续：已合入主线
+
+补丁以 `fix/pool-state-and-timeouts` 分支提交，PR #1 已合并；上游 `main` 现为 `0.2.3`
+（`369db4c release: 0.2.3 — 合并 9 项审查修复与 fix 分支 P0`），三处 P0/P1 已在主线生效。
+本节保留当时的独立补丁，供回溯。
+
 ## 附：可直接应用的补丁
 
 `docs/dsh-opencode-go-fixes.patch`（134 行）修掉了上面 4 个最要命的问题，`git apply` 即可：
