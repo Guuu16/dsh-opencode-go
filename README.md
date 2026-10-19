@@ -202,7 +202,8 @@ claude
 aipool init [--port 8787] [--name 设备名]      初始化配置，打印 admin token 和第一个客户端 token
 aipool serve                                    前台运行（SIGHUP 热加载，Ctrl-C 退出）
 aipool status [--json]                          池状态 / 配额 / 令牌（从运行中的 daemon 读）
-aipool dashboard [--open]                       打印（并打开）带 token 的面板地址
+aipool dashboard|open                           打印（并打开）带 token 的面板地址
+aipool stop | restart [--port N]                停止 / 重启后台 daemon
 
 aipool key add --provider ID --label 名称 [--key K]
 aipool key ls | rm --provider ID <id|label> | test [--provider ID]

@@ -765,6 +765,50 @@ function cmdUninstall() {
   ok(`已卸载（${file}）`)
 }
 
+async function cmdStop() {
+  const info = daemonInfo()
+  if (!info) {
+    ok('没有在跑的 daemon')
+    return
+  }
+  try {
+    process.kill(info.pid, 'SIGTERM')
+  } catch (error) {
+    fail(`停止失败：${error.message}`)
+    return
+  }
+  for (let i = 0; i < 30; i += 1) {
+    await new Promise(resolve => setTimeout(resolve, 100))
+    if (!daemonInfo()) break
+  }
+  ok(`已停止（pid ${info.pid}）`)
+  if (launchd.status().installed) {
+    info(color.dim('  注意：LaunchAgent 会把它拉起来；要彻底停用请 aipool uninstall'))
+  }
+}
+
+async function cmdRestart({ flags }) {
+  await cmdStop()
+  await new Promise(resolve => setTimeout(resolve, 300))
+  const args = [BIN, 'serve', ...(flags.port !== undefined ? ['--port', String(flags.port)] : [])]
+  const child = spawn(process.execPath, args, { detached: true, stdio: 'ignore' })
+  child.unref()
+  for (let i = 0; i < 30; i += 1) {
+    await new Promise(resolve => setTimeout(resolve, 100))
+    const config = requireConfig()
+    try {
+      const response = await fetch(`http://127.0.0.1:${daemonInfo()?.port ?? config.server.port}/healthz`, { signal: AbortSignal.timeout(800) })
+      if (response.ok) {
+        ok(`已重启（pid ${daemonInfo()?.pid ?? '?'}）`)
+        return
+      }
+    } catch {
+      // keep waiting
+    }
+  }
+  fail('重启后 3 秒内没有起来，看 aipool logs')
+}
+
 async function cmdDashboard({ flags }) {
   const config = requireConfig()
   const url = `http://${lanAddressHint(config.server.host)}:${config.server.port}/?token=${config.auth.adminToken}`
@@ -784,6 +828,8 @@ function usage() {
   serve                   前台运行网关（Ctrl-C 退出；SIGHUP 热加载配置）
   status [--json]         查看运行中的池状态、配额、最近请求
   dashboard [--open]      打印（并打开）带 admin token 的面板地址
+  stop                    停止后台 daemon
+  restart [--port N]      重启后台 daemon
 
   key add --provider ID --label 名称 [--key K | 交互输入]
   key ls | key rm --provider ID <id|label> | key test [--provider ID]
@@ -820,7 +866,10 @@ async function main() {
       case 'install': cmdInstall({ flags }); break
       case 'uninstall': cmdUninstall(); break
       case 'logs': await cmdLogs({ flags }); break
-      case 'dashboard': await cmdDashboard({ flags }); break
+      case 'dashboard':
+      case 'open': await cmdDashboard({ flags: { ...flags, open: true } }); break
+      case 'stop': await cmdStop(); break
+      case 'restart': await cmdRestart({ flags }); break
       case 'probe': {
         const config = requireConfig()
         await probeKeys(config, flags.provider ? [resolveProviderRef(config, flags.provider)] : config.providers)
