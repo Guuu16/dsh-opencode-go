@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'none'">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpenCode Go Pool</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <img class="brand-icon" src="../assets/icon-64.png" alt="">
+        <div class="brand-text">
+          <h1>OpenCode Go Pool</h1>
+          <p>多账号号池 · 额度自动切换 · Windows 桌面版</p>
+        </div>
+      </div>
+      <div class="top-actions">
+        <span id="proxy-pill" class="pill"><i class="dot"></i><span id="proxy-pill-text">代理未启动</span></span>
+        <button id="refresh-btn" class="btn">刷新额度</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="col-main">
+        <div id="banner" class="banner hidden"></div>
+
+        <div class="section-head">
+          <h2>账号 <span id="account-count" class="count">0</span></h2>
+          <button id="add-btn" class="btn primary">＋ 添加账号</button>
+        </div>
+
+        <div id="accounts" class="accounts"></div>
+
+        <div id="empty" class="empty">
+          <div class="empty-mark">GO</div>
+          <h3>还没有账号</h3>
+          <p>添加你的 OpenCode Go API Key。每个 Key 对应一个账号，额度互相独立；号池会自动使用有余量的那个。</p>
+          <button id="empty-add-btn" class="btn primary">添加第一个账号</button>
+        </div>
+      </section>
+
+      <aside class="col-side">
+        <section class="card" id="proxy-card">
+          <div class="card-head">
+            <h3>本地代理</h3>
+            <span id="proxy-state" class="tag">未启动</span>
+          </div>
+          <p class="hint">
+            把客户端的 Base URL 指向下面的地址，API Key 随便填。每个请求都会自动带上当前账号的 Key；
+            额度耗尽或 Key 失效时，代理会在同一次请求内换号重试。
+          </p>
+          <div class="copy-row">
+            <input id="proxy-url" readonly value="—">
+            <button id="copy-url" class="btn">复制</button>
+          </div>
+          <p class="mono muted" id="proxy-env">OPENAI_BASE_URL=…</p>
+          <div class="row">
+            <button id="proxy-toggle" class="btn">停止代理</button>
+            <button id="proxy-health" class="btn ghost">健康检查</button>
+          </div>
+          <p id="proxy-error" class="error hidden"></p>
+        </section>
+
+        <section class="card" id="settings-card">
+          <div class="card-head">
+            <h3>切号策略</h3>
+          </div>
+          <div class="field">
+            <label for="set-preempt">用量达到阈值时提前避让</label>
+            <div class="inline">
+              <input id="set-preempt" type="number" min="0" max="100" step="1">
+              <span class="unit">%</span>
+            </div>
+            <p class="hint">5 小时 / 每周 / 每月任一窗口达到该值就换下一个账号；100 = 只有失败时才切。</p>
+          </div>
+          <div class="field">
+            <label for="set-consec">连续失败多少次后切号</label>
+            <div class="inline">
+              <input id="set-consec" type="number" min="0" max="20" step="1">
+              <span class="unit">次</span>
+            </div>
+            <p class="hint">限流、5xx、网络错误累计达到该次数才切；0 = 关闭。额度耗尽和 Key 失效始终立即切。</p>
+          </div>
+          <div class="field">
+            <label for="set-interval">额度刷新间隔</label>
+            <select id="set-interval">
+              <option value="15000">15 秒</option>
+              <option value="30000">30 秒</option>
+              <option value="60000">60 秒</option>
+              <option value="120000">120 秒</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="set-port">代理端口</label>
+            <div class="inline">
+              <input id="set-port" type="number" min="1024" max="65535" step="1">
+            </div>
+          </div>
+          <div class="checks">
+            <label class="check"><input id="set-auto-invalid" type="checkbox"> 额度接口返回 401 时自动标记 Key 失效</label>
+            <label class="check"><input id="set-login" type="checkbox"> 开机自动启动（安装版）</label>
+            <label class="check"><input id="set-tray" type="checkbox"> 关闭窗口时隐藏到系统托盘</label>
+          </div>
+          <button id="save-settings" class="btn primary block">保存设置</button>
+        </section>
+
+        <section class="card" id="logs-card">
+          <div class="card-head">
+            <h3>事件日志</h3>
+            <button id="clear-logs" class="btn tiny ghost">清空</button>
+          </div>
+          <div id="logs" class="logs"></div>
+        </section>
+      </aside>
+    </main>
+
+    <footer class="footer">
+      <span id="footer-info">密钥使用 Windows DPAPI 加密，仅保存在本机</span>
+      <span class="footer-shortcut">Ctrl + Alt + O 切到下一个账号</span>
+    </footer>
+  </div>
+
+  <dialog id="account-dialog">
+    <form id="account-form" novalidate>
+      <h3 id="dialog-title">添加账号</h3>
+      <div class="field">
+        <label for="f-label">显示名</label>
+        <input id="f-label" maxlength="60" placeholder="例如：主号 / 备用号" autocomplete="off">
+      </div>
+      <div class="field">
+        <label for="f-secret">API Key</label>
+        <input id="f-secret" type="password" autocomplete="off" spellcheck="false" placeholder="粘贴 sk-... 密钥">
+      </div>
+      <p class="hint" id="dialog-hint">密钥使用 Windows DPAPI 加密保存在本机，不会上传到任何服务器。</p>
+      <p class="error hidden" id="dialog-error"></p>
+      <div class="dialog-actions">
+        <button type="button" id="dialog-cancel" class="btn">取消</button>
+        <button type="submit" id="dialog-submit" class="btn primary">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast-stack"></div>
+  <div id="busy" class="busy hidden"><span class="spinner"></span></div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

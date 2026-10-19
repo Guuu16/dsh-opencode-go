@@ -1,0 +1,9 @@
+node_modules/
+dist/
+*.log
+.smoke-data/
+.demo-data/
+.portable-data/
+.install-data/
+.install-test/
+.final-test/

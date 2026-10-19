@@ -1,0 +1,69 @@
+{
+  "name": "opencode-go-pool",
+  "productName": "OpenCode Go Pool",
+  "version": "1.0.0",
+  "description": "OpenCode Go 多账号号池：额度看板、托盘一键换号、本地 OpenAI 兼容代理（Windows 桌面版）",
+  "author": "Guuu16",
+  "license": "MIT",
+  "type": "module",
+  "main": "electron/main.cjs",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "smoke": "electron . --smoke-test",
+    "test": "node --test test/*.test.mjs",
+    "dist": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1",
+    "dist:dir": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -Dir"
+  },
+  "devDependencies": {
+    "electron": "^44.9.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.guuu16.opencodegopool",
+    "productName": "OpenCode Go Pool",
+    "asar": true,
+    "afterPack": "scripts/after-pack.cjs",
+    "directories": {
+      "output": "dist",
+      "buildResources": "assets"
+    },
+    "files": [
+      "electron/**/*",
+      "renderer/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "win": {
+      "icon": "assets/icon.ico",
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "portable": {
+      "artifactName": "OpenCodeGoPool-${version}-portable.exe"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "OpenCode Go Pool",
+      "artifactName": "OpenCodeGoPool-${version}-setup.exe"
+    }
+  }
+}
