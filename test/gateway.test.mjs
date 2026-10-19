@@ -649,3 +649,72 @@ test('a mid-stream upstream error is forwarded exactly once', async () => {
     await upstream.close()
   }
 })
+
+test('a public /models endpoint fills the catalog even with no key', async () => {
+  const upstream = await startFake({
+    'GET /v1/models': ({ res }) => json(res, 200, {
+      object: 'list',
+      data: [{ id: 'alpha' }, { id: 'beta' }, { id: 'gamma' }],
+    }),
+  })
+  const config = makeConfig({
+    providers: [{
+      id: 'p1',
+      type: 'openai',
+      baseUrl: `${upstream.url}/v1`,
+      modelsUrl: `${upstream.url}/v1/models`,
+      models: [],
+      keys: [],
+    }],
+  })
+  const gw = await bootGateway(config)
+  try {
+    const list = await gw.json('/v1/models', { method: 'GET' })
+    const ids = list.body.data.map(entry => entry.id)
+    assert.ok(ids.includes('alpha'), `bare id missing: ${ids.join(',')}`)
+    assert.ok(ids.includes('p1/beta'), `provider id missing: ${ids.join(',')}`)
+  } finally {
+    await gw.close()
+    await upstream.close()
+  }
+})
+
+test('adding a provider and reloading refreshes the catalog without a restart', async () => {
+  const first = await startFake({
+    'GET /v1/models': ({ res }) => json(res, 200, { object: 'list', data: [{ id: 'old-model' }] }),
+  })
+  const second = await startFake({
+    'GET /v1/models': ({ res }) => json(res, 200, { object: 'list', data: [{ id: 'new-model' }] }),
+  })
+  const base = {
+    id: 'p1',
+    type: 'openai',
+    baseUrl: `${first.url}/v1`,
+    modelsUrl: `${first.url}/v1/models`,
+    models: [],
+    keys: [],
+  }
+  const gw = await bootGateway(makeConfig({ providers: [base] }))
+  try {
+    await gw.json('/v1/models', { method: 'GET' })
+    const next = makeConfig({
+      providers: [
+        base,
+        { id: 'p2', type: 'openai', baseUrl: `${second.url}/v1`, modelsUrl: `${second.url}/v1/models`, models: [], keys: [] },
+      ],
+    })
+    gw.gateway.reload(next)
+    let ids = []
+    for (let i = 0; i < 20; i += 1) {
+      const list = await gw.json('/v1/models', { method: 'GET' })
+      ids = list.body.data.map(entry => entry.id)
+      if (ids.includes('new-model')) break
+      await new Promise(resolve => setTimeout(resolve, 100))
+    }
+    assert.ok(ids.includes('new-model'), `reload did not refresh the catalog: ${ids.join(',')}`)
+  } finally {
+    await gw.close()
+    await first.close()
+    await second.close()
+  }
+})

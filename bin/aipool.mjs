@@ -637,6 +637,41 @@ function quotaCell(quota) {
   return `${rolling === null || rolling === undefined ? '?' : bar(rolling)} ${color.dim('/')} ${weekly === null || weekly === undefined ? '?' : bar(weekly)}`
 }
 
+async function cmdModels({ flags }) {
+  const config = requireConfig()
+  const wanted = flags.provider ? resolveProviderRef(config, flags.provider).id : null
+  const daemon = daemonInfo()
+  const rows = []
+  if (daemon) {
+    if (flags.refresh === true) {
+      const result = await api(config, '/admin/action', { method: 'POST', body: { action: 'refreshCatalog' } })
+      info(color.dim(`已刷新：${JSON.stringify(result.providers ?? {})}`))
+    }
+    const snapshot = await api(config, '/admin/status')
+    for (const provider of snapshot.providers) {
+      if (wanted && provider.id !== wanted) continue
+      for (const id of provider.models) rows.push([provider.id, id])
+    }
+  } else {
+    // No daemon: read the catalog the last run cached.
+    const cache = cachedCatalog()
+    for (const [providerId, models] of Object.entries(cache)) {
+      if (wanted && providerId !== wanted) continue
+      for (const model of Array.isArray(models) ? models : []) rows.push([providerId, model.id])
+    }
+  }
+  if (flags.json === true) {
+    info(JSON.stringify(rows.map(([provider, id]) => ({ provider, id })), null, 2))
+    return
+  }
+  if (rows.length === 0) {
+    info(color.yellow('目录还是空的：确认 provider 的 modelsUrl 可达，或 aipool models --refresh'))
+    return
+  }
+  info(table(rows, ['PROVIDER', 'MODEL']))
+  info(color.dim(`共 ${rows.length} 个模型；客户端用裸 id 或 provider/model 都能调`))
+}
+
 async function cmdConfig({ flags }) {
   const config = requireConfig()
   if (flags.json) {
@@ -839,6 +874,7 @@ function usage() {
 
   provider add --id ID --type openai|anthropic --base-url URL [--model m1,m2] [--path /chat/completions]
   provider ls | provider rm <id>
+  models [--refresh] [--provider ID] [--json]   列出所有上游模型（daemon 在跑时取实时目录）
 
   install                 安装 macOS LaunchAgent（开机自启）
   uninstall               卸载 LaunchAgent
@@ -861,6 +897,7 @@ async function main() {
       case 'key': await cmdKey({ flags, positional }); break
       case 'token': await cmdToken({ flags, positional }); break
       case 'provider': await cmdProvider({ flags, positional }); break
+      case 'models': await cmdModels({ flags }); break
       case 'config': await cmdConfig({ flags }); break
       case 'doctor': await cmdDoctor(); break
       case 'install': cmdInstall({ flags }); break

@@ -124,6 +124,7 @@ export class Router {
     }
     this.recent = []
     this.catalogFetchedAt = 0
+    this.catalogInflight = null
     this.lastSavedDigest = null
     this.buildPools()
     if (restoreState) this.restoreState()
@@ -189,26 +190,47 @@ export class Router {
    * Pull `/models` from every provider that advertises one. Best-effort:
    * failures leave the previous catalog in place.
    */
-  async refreshCatalog({ force = false } = {}) {
+  /**
+   * Pull `/models` from every provider that advertises one.
+   *
+   * - A key is used when the pool has one, but its absence is not fatal: many
+   *   `/models` endpoints (OpenCode Go, OpenRouter) are public, and hiding the
+   *   catalog before the first key is added makes the tool look empty.
+   * - Concurrent callers share one sweep, so `/v1/models` right after boot does
+   *   not race the startup fetch and return an empty list.
+   */
+  async refreshCatalog({ force = false, timeoutMs = 15_000 } = {}) {
     const now = Date.now()
+    if (!force && this.catalogInflight) return this.catalogInflight
     if (!force && now - this.catalogFetchedAt < CATALOG_TTL_MS) return
+    this.catalogInflight = this.sweepCatalog({ timeoutMs, now })
+    try {
+      return await this.catalogInflight
+    } finally {
+      this.catalogInflight = null
+    }
+  }
+
+  async sweepCatalog({ timeoutMs = 15_000, now = Date.now() } = {}) {
     const cache = readCatalogCache()
+    let succeeded = 0
     await Promise.all(this.config.providers.map(async provider => {
       if (!provider.enabled) return
       const url = provider.modelsUrl ?? (provider.modelsPath ? joinUrl(provider.baseUrl, provider.modelsPath) : null)
       if (!url) return
       const key = this.pool(provider.id)?.pick()
-      if (!key) return
       const headers = { accept: 'application/json' }
-      if (provider.authHeader === 'bearer') headers.authorization = `Bearer ${key.key}`
-      else if (provider.authHeader === 'x-api-key') headers['x-api-key'] = key.key
-      else {
-        headers.authorization = `Bearer ${key.key}`
-        headers['x-api-key'] = key.key
+      if (key) {
+        if (provider.authHeader === 'bearer') headers.authorization = `Bearer ${key.key}`
+        else if (provider.authHeader === 'x-api-key') headers['x-api-key'] = key.key
+        else {
+          headers.authorization = `Bearer ${key.key}`
+          headers['x-api-key'] = key.key
+        }
       }
       if (provider.type === 'anthropic') headers['anthropic-version'] = provider.anthropicVersion
       try {
-        const response = await fetch(url, { headers, signal: AbortSignal.timeout(15_000) })
+        const response = await fetch(url, { headers, signal: AbortSignal.timeout(timeoutMs) })
         if (!response.ok) return
         const body = await response.json()
         const raw = Array.isArray(body) ? body : Array.isArray(body?.data) ? body.data : []
@@ -225,13 +247,17 @@ export class Router {
         for (const model of [...models, ...staticModels]) merged.set(model.id, model)
         this.catalog.set(provider.id, [...merged.values()])
         cache[provider.id] = [...merged.values()]
+        succeeded += 1
         log('info', `catalog: ${provider.id} → ${models.length} models`)
       } catch (error) {
         log('debug', `catalog fetch failed for ${provider.id}: ${error.message}`)
       }
     }))
-    this.catalogFetchedAt = now
+    // A total failure retries within a minute instead of waiting the full TTL,
+    // so fixing a URL in the config takes effect quickly.
+    this.catalogFetchedAt = succeeded > 0 ? now : now - CATALOG_TTL_MS + 60_000
     writeCatalogCache(cache)
+    return { providers: Object.fromEntries([...this.catalog].map(([id, models]) => [id, models.length])) }
   }
 
   // ---- model resolution ----------------------------------------------------

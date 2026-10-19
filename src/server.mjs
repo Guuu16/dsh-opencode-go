@@ -184,6 +184,7 @@ export async function createGateway({ config, log: logger = log, restoreState = 
   const rateWindows = new Map()
   const startedAt = Date.now()
   let stateTimer = null
+  let catalogTimer = null
 
   router.versionString = VERSION
 
@@ -472,6 +473,11 @@ export async function createGateway({ config, log: logger = log, restoreState = 
       }
     }
 
+    if (action === 'refreshCatalog') {
+      const result = await router.refreshCatalog({ force: true })
+      return sendJSON(res, 200, { ok: true, ...result })
+    }
+
     if (action === 'disableToken' || action === 'enableToken') {
       const token = config.auth.tokens.find(item => item.id === tokenId)
       if (!token) throw new GatewayError(`unknown token "${tokenId}"`, { status: 404, code: 'TOKEN_NOT_FOUND', type: 'invalid_request_error' })
@@ -539,6 +545,9 @@ export async function createGateway({ config, log: logger = log, restoreState = 
 
     if (pathname === '/v1/models' && req.method === 'GET') {
       const auth = authenticate(req, url)
+      // First call after boot (or after 10 min) pulls the live lineup; callers
+      // should never see an empty catalog just because no request warmed it.
+      await router.refreshCatalog({ timeoutMs: 8_000 }).catch(() => {})
       const allowed = auth.token?.models?.length ? auth.token.models : null
       const data = modelList().filter(entry => allowed === null || allowed.includes(entry.id))
       sendJSON(res, 200, { object: 'list', data })
@@ -647,6 +656,9 @@ export async function createGateway({ config, log: logger = log, restoreState = 
       config = nextConfig
       allowList = nextAllowList
       poller.router = router
+      // A new key or provider was just added: do not wait 10 minutes to see
+      // its models.
+      void router.refreshCatalog({ force: true })
       return config
     },
     async start() {
@@ -660,7 +672,11 @@ export async function createGateway({ config, log: logger = log, restoreState = 
       poller.start()
       stateTimer = setInterval(() => router.saveState(), 5_000)
       stateTimer.unref?.()
-      router.refreshCatalog().catch(() => {})
+      // Providers add models between restarts; refresh on the same cadence the
+      // router already uses for the cache TTL.
+      catalogTimer = setInterval(() => { void router.refreshCatalog() }, 10 * 60_000)
+      catalogTimer.unref?.()
+      void router.refreshCatalog()
       const address = server.address()
       // port 0 lets the OS choose; snapshots and the dashboard must show the
       // port that is actually listening, not the request.
@@ -673,7 +689,9 @@ export async function createGateway({ config, log: logger = log, restoreState = 
     async stop() {
       poller.stop()
       if (stateTimer) clearInterval(stateTimer)
+      if (catalogTimer) clearInterval(catalogTimer)
       stateTimer = null
+      catalogTimer = null
       router.saveState()
       const closing = new Promise(resolve => server.close(() => resolve()))
       // Keep-alive sockets would otherwise hold close() open for the full
