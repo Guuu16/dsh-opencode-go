@@ -6,7 +6,7 @@
  * leaves the main process: the renderer only receives a masked hint.
  */
 
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { randomUUID } from 'node:crypto'
 
@@ -130,20 +130,29 @@ export class Store {
     this.scheme = scheme
     this.logger = logger
     this.state = defaultState()
+    /** Set when an existing state file cannot be parsed; save() must not clobber it. */
+    this.loadError = null
   }
 
   load() {
     let raw = null
-    try {
-      raw = JSON.parse(readFileSync(this.file, 'utf8'))
-    } catch {
-      raw = null
+    if (existsSync(this.file)) {
+      try {
+        raw = JSON.parse(readFileSync(this.file, 'utf8'))
+      } catch (error) {
+        // A BOM, a partial write or a hand-edit must never silently turn into
+        // "no accounts" and then overwrite the only copy of the keys.
+        this.loadError = String((error && error.message) || error)
+        this.logger?.warn?.(`[store] cannot parse ${this.file}: ${this.loadError}`)
+        return this.state
+      }
     }
     this.state = normalizeState(raw)
     return this.state
   }
 
   save() {
+    if (this.loadError) return false
     try {
       mkdirSync(dirname(this.file), { recursive: true })
       const tmp = `${this.file}.${process.pid}.tmp`

@@ -46,6 +46,12 @@ export class Controller extends EventEmitter {
     this.store.load()
     this.pool = new Pool({ state: this.store.state, now: this.now })
     this.pool.onChange = () => this.changed()
+    if (this.store.loadError) {
+      this.pushLog({
+        level: 'error',
+        message: `状态文件无法解析，已停止写入以免覆盖：${this.store.loadError}。请修复或移走 ${this.store.file}`,
+      })
+    }
     this.pushLog({ level: 'info', message: `号池已加载：${this.store.state.accounts.length} 个账号` })
     this.startPolling()
     if (this.autoStartProxy && this.store.state.settings.proxyEnabled) {
@@ -87,7 +93,13 @@ export class Controller extends EventEmitter {
         running: this.proxyInfo.running,
         port: this.proxyInfo.port,
         host: this.proxyInfo.host,
-        baseUrl: this.proxyInfo.running ? `http://${this.proxyInfo.host}:${this.proxyInfo.port}/v1` : null,
+        baseUrl: this.proxyInfo.running ? `http://${this.proxyInfo.host}:${this.proxyInfo.port}/openai/v1` : null,
+        bases: this.proxyInfo.running ? {
+          openai: `http://${this.proxyInfo.host}:${this.proxyInfo.port}/openai/v1`,
+          anthropic: `http://${this.proxyInfo.host}:${this.proxyInfo.port}/anthropic`,
+          google: `http://${this.proxyInfo.host}:${this.proxyInfo.port}/google`,
+          legacy: `http://${this.proxyInfo.host}:${this.proxyInfo.port}/v1`,
+        } : null,
         error: this.proxyError,
       },
       logs: this.logs.slice(-120),
@@ -322,7 +334,13 @@ export class Controller extends EventEmitter {
     return {
       running: this.proxyInfo.running,
       port: this.proxyInfo.port,
-      baseUrl: this.proxyInfo.running ? `http://${this.proxyInfo.host}:${this.proxyInfo.port}/v1` : null,
+      baseUrl: this.proxyInfo.running ? `http://${this.proxyInfo.host}:${this.proxyInfo.port}/openai/v1` : null,
+      bases: this.proxyInfo.running ? {
+        openai: `http://${this.proxyInfo.host}:${this.proxyInfo.port}/openai/v1`,
+        anthropic: `http://${this.proxyInfo.host}:${this.proxyInfo.port}/anthropic`,
+        google: `http://${this.proxyInfo.host}:${this.proxyInfo.port}/google`,
+        legacy: `http://${this.proxyInfo.host}:${this.proxyInfo.port}/v1`,
+      } : null,
       activeId: this.pool?.state.activeId ?? null,
       activeLabel: active?.label ?? null,
       accounts: (this.pool?.accounts ?? []).map(account => ({

@@ -49,19 +49,48 @@
             <span id="proxy-state" class="tag">未启动</span>
           </div>
           <p class="hint">
-            把客户端的 Base URL 指向下面的地址，API Key 随便填。每个请求都会自动带上当前账号的 Key；
-            额度耗尽或 Key 失效时，代理会在同一次请求内换号重试。
+            按客户端协议选 Base URL，API Key 随便填（例如 sk-pool）。网关会注入当前账号的真实 Key
+            和会话头；额度耗尽或 Key 失效时，在同一次请求内换号重试。
           </p>
-          <div class="copy-row">
-            <input id="proxy-url" readonly value="—">
-            <button id="copy-url" class="btn">复制</button>
+          <div class="base-list">
+            <div class="base-row">
+              <span class="base-label">OpenAI</span>
+              <input id="base-openai" readonly value="—">
+              <button class="btn tiny" data-copy="openai">复制</button>
+            </div>
+            <div class="base-row">
+              <span class="base-label">Anthropic</span>
+              <input id="base-anthropic" readonly value="—">
+              <button class="btn tiny" data-copy="anthropic">复制</button>
+            </div>
+            <div class="base-row">
+              <span class="base-label">Google</span>
+              <input id="base-google" readonly value="—">
+              <button class="btn tiny" data-copy="google">复制</button>
+            </div>
           </div>
-          <p class="mono muted" id="proxy-env">OPENAI_BASE_URL=…</p>
+          <p class="hint">Claude / Qwen / MiniMax 用 Anthropic；Gemini 用 Google；其余多数用 OpenAI。完整模型对照见 docs/CONFIG.md。</p>
           <div class="row">
             <button id="proxy-toggle" class="btn">停止代理</button>
             <button id="proxy-health" class="btn ghost">健康检查</button>
           </div>
           <p id="proxy-error" class="error hidden"></p>
+        </section>
+
+        <section class="card" id="models-card">
+          <div class="card-head">
+            <h3>模型与协议</h3>
+            <span class="tag">29</span>
+          </div>
+          <p class="hint">同一网关、四种协议。按上面对应的 Base URL 配置客户端；点模型名可复制 ID。</p>
+          <div class="proto-tabs" id="proto-tabs">
+            <button class="chip active" data-proto="openai">OpenAI 18</button>
+            <button class="chip" data-proto="responses">Responses 5</button>
+            <button class="chip" data-proto="anthropic">Anthropic 5</button>
+            <button class="chip" data-proto="google">Google 1</button>
+          </div>
+          <div id="model-list" class="model-list"></div>
+          <p class="hint" id="model-note">OpenAI Chat 组：兼容性最好，多数客户端都能直接用。</p>
         </section>
 
         <section class="card" id="settings-card">

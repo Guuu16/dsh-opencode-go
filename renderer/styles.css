@@ -394,6 +394,80 @@ body {
   font-size: 12px;
 }
 
+.base-list { display: flex; flex-direction: column; gap: 7px; }
+.base-row { display: flex; align-items: center; gap: 8px; }
+.base-row .base-label {
+  width: 64px;
+  flex: none;
+  font-size: 11px;
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.base-row input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text-2);
+  border-radius: 8px;
+  padding: 5px 8px;
+  font-family: "Cascadia Code", "Consolas", ui-monospace, monospace;
+  font-size: 11px;
+}
+
+.proto-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-3);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.chip:hover { color: var(--text-2); border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); }
+.chip.active {
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-color: transparent;
+  font-weight: 600;
+}
+
+.model-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 212px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  margin: 2px -4px;
+  padding: 0 4px;
+}
+.model-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 7px;
+  border-radius: 7px;
+  cursor: pointer;
+  font-family: "Cascadia Code", "Consolas", ui-monospace, monospace;
+  font-size: 11.5px;
+  color: var(--text-2);
+  border: 1px solid transparent;
+}
+.model-item:hover {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--text);
+}
+.model-item .copy-hint { opacity: 0; font-size: 10px; color: var(--text-3); }
+.model-item:hover .copy-hint { opacity: 1; }
+
 .row { display: flex; gap: 8px; flex-wrap: wrap; }
 
 .field { display: flex; flex-direction: column; gap: 6px; }

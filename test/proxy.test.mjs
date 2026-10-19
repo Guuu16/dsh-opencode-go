@@ -1,7 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import http from 'node:http'
-import { createProxyServer, isLoopbackOrigin, upstreamPathFor } from '../electron/core/proxy.js'
+import { classifyResponse } from '../electron/core/failures.js'
+import { createProxyServer, gatewayHeaders, gatewayTarget, isLoopbackOrigin, upstreamPathFor } from '../electron/core/proxy.js'
 
 async function startUpstream(handler) {
   const server = http.createServer(handler)
@@ -32,6 +33,43 @@ test('path mapping accepts both /v1-prefixed and bare paths', () => {
   assert.equal(upstreamPathFor('/chat/completions'), '/chat/completions')
   assert.equal(upstreamPathFor('/v1'), '/')
   assert.equal(upstreamPathFor('/v1/models'), '/models')
+})
+
+test('gateway maps each native protocol path without rewriting the request', () => {
+  assert.equal(gatewayTarget('/openai/v1/chat/completions'), 'https://opencode.ai/inference/go/openai/v1/chat/completions')
+  assert.equal(gatewayTarget('/openai/v1/responses'), 'https://opencode.ai/inference/go/openai/v1/responses')
+  assert.equal(gatewayTarget('/anthropic/v1/messages'), 'https://opencode.ai/inference/go/anthropic/v1/messages')
+  assert.equal(gatewayTarget('/google/v1beta/models/gemini-4-argon-contributor:generateContent'),
+    'https://opencode.ai/inference/go/google/v1beta/models/gemini-4-argon-contributor:generateContent')
+  assert.equal(gatewayTarget('/inference/go/v1/models'), 'https://opencode.ai/inference/go/v1/models')
+  // Legacy clients that only know /v1 keep working for the OpenAI chat family.
+  assert.equal(gatewayTarget('/v1/chat/completions'), 'https://opencode.ai/inference/go/openai/v1/chat/completions')
+  assert.equal(gatewayTarget('/v1/models'), 'https://opencode.ai/inference/go/openai/v1/models')
+})
+
+test('a Google API key in the query string is dropped (headers carry it)', () => {
+  assert.equal(gatewayTarget('/google/v1beta/models/x:generateContent', '?key=placeholder'),
+    'https://opencode.ai/inference/go/google/v1beta/models/x:generateContent')
+})
+
+test('gateway headers inject the key, session and a usable user agent', () => {
+  const openai = gatewayHeaders({ 'user-agent': 'curl/8.0', 'x-opencode-session': '' }, 'oc_secret', 'sess-1', '/openai/v1/chat/completions')
+  assert.equal(openai.authorization, 'Bearer oc_secret')
+  assert.equal(openai['x-api-key'], undefined)
+  assert.equal(openai['x-goog-api-key'], undefined)
+  assert.equal(openai['x-opencode-session'], 'sess-1')
+  assert.equal(openai['user-agent'], 'opencode-go-pool/1.0')
+
+  const anthropic = gatewayHeaders({}, 'oc_secret', 'sess-1', '/anthropic/v1/messages')
+  assert.equal(anthropic['x-api-key'], 'oc_secret')
+  assert.equal(anthropic['anthropic-version'], '2023-06-01')
+
+  const google = gatewayHeaders({}, 'oc_secret', 'sess-1', '/google/v1beta/models/x:generateContent')
+  assert.equal(google['x-goog-api-key'], 'oc_secret')
+
+  const preserved = gatewayHeaders({ 'user-agent': 'my-agent/2.0', 'x-opencode-session': 'client-session' }, 'k', 'sess-1', '/openai/v1/chat/completions')
+  assert.equal(preserved['x-opencode-session'], 'client-session')
+  assert.equal(preserved['user-agent'], 'my-agent/2.0')
 })
 
 test('a quota 429 rotates accounts and the streaming reply still arrives', async t => {
@@ -171,6 +209,32 @@ test('only loopback web origins get CORS', () => {
   assert.equal(isLoopbackOrigin('http://127.0.0.1:3000'), true)
   assert.equal(isLoopbackOrigin('https://evil.example'), false)
   assert.equal(isLoopbackOrigin('null'), false)
+})
+
+test('a region-restricted model is not treated as an invalid credential', async t => {
+  assert.equal(classifyResponse(403, '{"error":{"code":"unsupported_country_region_territory"}}'), 'REGION')
+  assert.equal(classifyResponse(401, '{"error":{"message":"Invalid credential"}}'), 'INVALID_CREDENTIAL')
+
+  let failures = 0
+  const upstream = await startUpstream((req, res) => {
+    res.writeHead(403, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ model: 'gpt-6-luna', error: { code: 'unsupported_country_region_territory', message: 'Country, region, or territory not supported' } }))
+  })
+  const { proxy, info } = await startProxy({
+    upstreamBase: upstream.base,
+    resolveKey: async () => ({ id: 'one', label: '主号', secret: 'key' }),
+    onFailure: async () => { failures += 1; return null },
+  })
+  t.after(async () => { await proxy.stop(); await upstream.close() })
+
+  const response = await fetch(`http://127.0.0.1:${info.port}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: '{}',
+  })
+  assert.equal(response.status, 403)
+  assert.match(await response.text(), /unsupported_country_region_territory/)
+  assert.equal(failures, 0, 'region errors must not rotate or invalidate the account')
 })
 
 test('a cross-origin preflight from a website is rejected', async t => {

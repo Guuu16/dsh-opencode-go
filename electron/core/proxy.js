@@ -9,19 +9,80 @@
  */
 
 import http from 'node:http'
+import { randomUUID } from 'node:crypto'
 import { Readable } from 'node:stream'
 import {
   classifyNetworkError,
   classifyResponse,
   describeFailure,
+  REGION_CODE,
 } from './failures.js'
-import { DEFAULT_API_BASE_URL } from './usage.js'
 
 const HOP_BY_HOP = new Set([
   'host', 'authorization', 'content-length', 'connection', 'keep-alive',
   'proxy-authenticate', 'proxy-authorization', 'te', 'trailers',
-  'transfer-encoding', 'upgrade', 'accept-encoding',
+  'transfer-encoding', 'upgrade', 'accept-encoding', 'x-api-key', 'x-goog-api-key',
 ])
+
+const OPENCODE_ORIGIN = 'https://opencode.ai'
+const GENERIC_USER_AGENT = /^(curl|wget|python-requests|python-urllib|node|undici|go-http-client|okhttp|axios|powershell|java|libwww)/i
+
+/**
+ * Resolve one incoming path to the OpenCode origin.
+ *
+ * The gateway speaks the four native protocols by path, no body rewriting:
+ *   /openai/v1/...     -> /inference/go/openai/v1/...
+ *   /anthropic/v1/...  -> /inference/go/anthropic/v1/...
+ *   /google/v1beta/... -> /inference/go/google/v1beta/...
+ *   /inference/go/...  -> forwarded verbatim
+ *   /v1/...            -> legacy alias for /inference/go/openai/v1/...
+ */
+export function gatewayTarget(pathname, search = '') {
+  const params = new URLSearchParams(search.startsWith('?') ? search.slice(1) : search)
+  params.delete('key') // Google SDKs put the key in the query; the gateway injects a header instead
+  const qs = params.toString() ? `?${params.toString()}` : ''
+  let path = pathname || '/'
+
+  // One documented catalog endpoint serves every protocol; keep /models
+  // working on each protocol base instead of letting it 404 upstream.
+  if (path === '/openai/v1/models' || path === '/anthropic/v1/models' || path === '/google/v1beta/models') {
+    return `${OPENCODE_ORIGIN}/inference/go/v1/models${qs}`
+  }
+  if (path.startsWith('/inference/go/') || path.startsWith('/zen/go/')) {
+    return `${OPENCODE_ORIGIN}${path}${qs}`
+  }
+  if (path === '/openai' || path === '/openai/') path = '/openai/v1'
+  if (path.startsWith('/openai/')) return `${OPENCODE_ORIGIN}/inference/go${path}${qs}`
+  if (path === '/anthropic' || path === '/anthropic/') path = '/anthropic/v1'
+  if (path.startsWith('/anthropic/')) return `${OPENCODE_ORIGIN}/inference/go${path}${qs}`
+  if (path === '/google' || path === '/google/') path = '/google/v1beta'
+  if (path.startsWith('/google/')) return `${OPENCODE_ORIGIN}/inference/go${path}${qs}`
+
+  if (path === '/v1' || path === '/v1/') path = '/v1/models'
+  const rest = path.startsWith('/v1/') ? path.slice(3) : path
+  return `${OPENCODE_ORIGIN}/inference/go/openai/v1${rest}${qs}`
+}
+
+/**
+ * Build upstream headers for one attempt: the active key, the session header
+ * OpenCode Go requires, and a non-generic user agent when the client sent one
+ * of the library defaults OpenCode's abuse filter dislikes.
+ */
+export function gatewayHeaders(input, secret, sessionId, pathname = '') {
+  const headers = { ...input }
+  headers.authorization = `Bearer ${secret}`
+  const anthropic = pathname.includes('/anthropic')
+  const google = pathname.includes('/google')
+  if (anthropic) {
+    headers['x-api-key'] = secret
+    if (!headers['anthropic-version']) headers['anthropic-version'] = '2023-06-01'
+  }
+  if (google) headers['x-goog-api-key'] = secret
+  if (!headers['x-opencode-session']) headers['x-opencode-session'] = sessionId
+  const ua = String(headers['user-agent'] || '')
+  if (ua.length === 0 || GENERIC_USER_AGENT.test(ua)) headers['user-agent'] = 'opencode-go-pool/1.0'
+  return headers
+}
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms))
@@ -123,7 +184,7 @@ export function upstreamPathFor(pathname) {
 
 /**
  * @param {object} options
- * @param {string} [options.upstreamBase]
+ * @param {string} [options.upstreamBase] - fixed upstream base for tests; when omitted the native OpenCode gateway is used.
  * @param {() => Promise<{id: string, label: string, secret: string}|null>} options.resolveKey
  * @param {(id: string, code: string, message: string) => Promise<object|null>} options.onFailure
  * @param {(id: string) => void} [options.onSuccess]
@@ -133,9 +194,10 @@ export function upstreamPathFor(pathname) {
  * @param {() => object} [options.cycle]
  * @param {number} [options.maxAttempts]
  * @param {number} [options.headersTimeoutMs]
+ * @param {string} [options.sessionId]
  */
 export function createProxyServer({
-  upstreamBase = DEFAULT_API_BASE_URL,
+  upstreamBase = null,
   resolveKey,
   onFailure,
   onSuccess = () => {},
@@ -145,24 +207,33 @@ export function createProxyServer({
   cycle = () => null,
   maxAttempts = 8,
   headersTimeoutMs = 120000,
+  sessionId = `sess-${randomUUID()}`,
 }) {
   let startedAt = null
 
   function log(message, level = 'info') {
+    if (process.env.POOL_DEBUG) console.log(`[proxy:${level}] ${message}`)
     onEvent({ level, message, at: new Date().toISOString() })
   }
 
   async function forward(req, url, body, key, signal) {
-    const headers = {}
+    const base = {}
     for (const [name, value] of Object.entries(req.headers)) {
       if (HOP_BY_HOP.has(name)) continue
-      headers[name] = value
+      base[name] = value
     }
-    headers.authorization = `Bearer ${key.secret}`
+    const headers = gatewayHeaders(base, key.secret, sessionId, url.pathname)
     headers['accept-encoding'] = 'identity'
     if (body.length > 0) headers['content-length'] = String(body.length)
-    const target = `${upstreamBase.replace(/\/+$/, '')}${upstreamPathFor(url.pathname)}${url.search}`
+    const target = upstreamBase
+      ? `${upstreamBase.replace(/\/+$/, '')}${upstreamPathFor(url.pathname)}${url.search}`
+      : gatewayTarget(url.pathname, url.search)
     const timer = setTimeout(() => signal.controller.abort(), headersTimeoutMs)
+    if (process.env.POOL_DEBUG) {
+      const redacted = { ...headers, authorization: 'Bearer ***', 'x-api-key': '***', 'x-goog-api-key': '***' }
+      console.log('[proxy:debug] ->', req.method, target, JSON.stringify(redacted))
+      console.log('[proxy:debug] body', body.length, JSON.stringify(body.toString('utf8').slice(0, 300)))
+    }
     try {
       const response = await fetch(target, {
         method: req.method,
@@ -335,14 +406,22 @@ export function createProxyServer({
       }
 
       const text = await readTextSafely(response)
+      if (process.env.POOL_DEBUG) {
+        console.log('[proxy:debug] <-', response.status, JSON.stringify(Object.fromEntries(response.headers.entries())))
+      }
+      log(`上游 HTTP ${response.status}（${response.headers.get('content-type') || '无 content-type'}）：${text.slice(0, 300) || '(空响应)'}`, 'warn')
       const code = classifyResponse(response.status, text)
-      if (code === null) {
-        writeJson(res, response.status, {
-          error: {
-            message: text.slice(0, 2000) || `upstream answered HTTP ${response.status}`,
-            type: 'UPSTREAM_ERROR',
-          },
-        })
+      // REGION is a model-level restriction: pass it through untouched, do not
+      // burn the account or rotate to another key (the next key is just as
+      // blocked in this country).
+      if (code === null || code === REGION_CODE) {
+        if (!res.writableEnded) {
+          res.writeHead(response.status, {
+            'content-type': response.headers.get('content-type') || 'application/json',
+            'cache-control': 'no-store',
+          })
+          res.end(text)
+        }
         return
       }
 

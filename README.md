@@ -16,7 +16,7 @@
 | 🔁 自动切号 | 额度耗尽、Key 失效立即切换；限流/5xx/网络错误按「连续失败 N 次」切换 |
 | 🎯 主动避让 | 任一额度窗口达到阈值就提前换号，不必等请求失败（默认 95%，可设 100 关闭） |
 | 🖱 托盘 + 快捷键 | 托盘菜单直接选账号；`Ctrl + Alt + O` 切到下一个可用账号；`Ctrl + Alt + Shift + O` 打开面板 |
-| 🌐 本地代理 | `http://127.0.0.1:8787/v1`，自动注入当前账号的 Key，同一请求内换号重试，SSE 流式透传 |
+| 🌐 本地代理 | 四种协议原样转发：`/openai/v1`、`/anthropic`、`/google`；自动注入 Key 和 `x-opencode-session`，同请求内换号重试，SSE 流式透传 |
 | 🔐 本地加密 | 密钥用 Windows DPAPI（Electron `safeStorage`）加密，只存本机；界面永远拿不到明文 |
 | 🪟 原生体验 | 关闭窗口隐藏到托盘、开机自启（安装版）、Windows 通知、单实例 |
 
@@ -46,16 +46,18 @@ Chromium 的沙箱**不能在「以管理员身份运行」的进程里初始化
 3. 在客户端里填：
 
 ```text
-Base URL: http://127.0.0.1:8787/v1
-API Key:  随便填（例如 sk-pool），代理会替换成当前账号的真实 Key
+Base URL: http://127.0.0.1:8787/openai/v1
+API Key:  sk-pool
 ```
 
 OpenAI SDK 示例：
 
 ```python
 from openai import OpenAI
-client = OpenAI(base_url="http://127.0.0.1:8787/v1", api_key="sk-pool")
+client = OpenAI(base_url="http://127.0.0.1:8787/openai/v1", api_key="sk-pool")
 ```
+
+Claude Code / Codex / ZCode / DSH 的完整配置见 **[docs/CONFIG.md](docs/CONFIG.md)**。
 
 `OPENAI_BASE_URL` / `OPENAI_API_KEY` 环境变量指向同样的值即可。
 
@@ -69,18 +71,19 @@ client = OpenAI(base_url="http://127.0.0.1:8787/v1", api_key="sk-pool")
 
 ## 本地代理
 
-绑定 `127.0.0.1`（仅本机），路径同时接受 `/v1/...` 和裸路径：
+绑定 `127.0.0.1`（仅本机），按 OpenCode Go 的原生协议原样转发：
 
-| 路径 | 说明 |
+| 路径 | 用途 |
 |---|---|
-| `GET /pool/health` | 运行状态、当前账号、各账号状态与用量 |
-| `GET /pool/usage` | 同上（给脚本用） |
-| `POST /pool/switch` | `{"id":"k-xxx"}` 切到指定账号，或 `{"direction":"next"}` 切到下一个 |
-| `* /v1/*` | 转发到 `https://opencode.ai/zen/go/v1/*`，替换 `Authorization` |
+| `/openai/v1/*` | OpenAI Chat 组（18）+ Responses 组（5） |
+| `/anthropic/*` | Anthropic Messages 组：Claude、Qwen、MiniMax |
+| `/google/*` | Google Generative AI 组：Gemini 4 Argon |
+| `/v1/*` | 兼容别名，等价于 OpenAI Chat 组 |
+| `/inference/go/*` | 原始透传（给自定义路径的客户端） |
 
-转发细节：请求体原样转发；响应为 SSE 时边收边发，不缓冲；重试只在响应开始之前发生（一旦开始吐字就不再切号，避免内容错乱）。成功响应带 `x-pool-key-id` / `x-pool-key-label` / `x-pool-attempts` 便于排查。
+网关自动注入 `Authorization`、`x-api-key` / `x-goog-api-key`（按协议）和 `x-opencode-session`；客户端不需要自己处理会话头。区域限制（例如 GPT/Grok 的 403）原样透传，不会把账号标失效。
 
-跨域只允许回环地址的网页（`localhost` / `127.0.0.1`）：来自其他网站的浏览器请求会在预检阶段被拒绝，避免任意网页偷偷消耗你的额度。命令行/SDK 客户端不受影响。
+完整的四种客户端配置、模型清单和排错表：[docs/CONFIG.md](docs/CONFIG.md)。
 
 ## 数据与安全
 
@@ -94,7 +97,7 @@ client = OpenAI(base_url="http://127.0.0.1:8787/v1", api_key="sk-pool")
 
 ```powershell
 pnpm install                              # 安装 Electron 与打包工具
-node --test test/*.test.mjs               # 38 项核心逻辑/代理测试（不启动 GUI）
+node --test test/*.test.mjs               # 44 项核心逻辑/代理测试（不启动 GUI）
 pnpm start                                # 开发运行
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1
 ```

@@ -35,6 +35,14 @@ export const INVALID_CREDENTIAL_CODE = 'INVALID_CREDENTIAL'
 export const RATE_LIMIT_CODE = 'RATE_LIMIT'
 export const SERVER_CODE = 'SERVER'
 export const TRANSPORT_CODE = 'TRANSPORT'
+export const REGION_CODE = 'REGION'
+
+const REGION_HINTS = [
+  'unsupported_country_region_territory',
+  'country, region, or territory not supported',
+  'not available in your region',
+  'region not supported',
+]
 
 /**
  * @param {number} status
@@ -43,6 +51,9 @@ export const TRANSPORT_CODE = 'TRANSPORT'
  */
 export function classifyResponse(status, body = '') {
   const text = String(body || '').toLowerCase()
+  // A model being unavailable in this country is a property of the MODEL, not
+  // of the account: rotating keys cannot fix it and must not invalidate them.
+  if (REGION_HINTS.some(hint => text.includes(hint))) return REGION_CODE
   if (status === 401 || status === 403) return INVALID_CREDENTIAL_CODE
   if (status === 402) return QUOTA_CODE
   if (status === 429) {
@@ -69,6 +80,7 @@ export function describeFailure(code) {
     case RATE_LIMIT_CODE: return '触发限流'
     case SERVER_CODE: return '上游 5xx'
     case TRANSPORT_CODE: return '网络错误'
+    case REGION_CODE: return '当前地区不支持该模型'
     default: return String(code || '未知错误')
   }
 }

@@ -94,6 +94,34 @@ const USAGE_ERROR_TEXT = {
   'bad-json': '额度接口响应无法解析',
 }
 
+// OpenCode Go 的模型按上游协议分组（pi-ai 1.3.0 目录）。
+// 配错协议会得到上游 400，所以这里按协议分开展示。
+const MODEL_CATALOG = {
+  openai: {
+    note: 'OpenAI Chat 组：兼容性最好，DSH / ZCode / Cherry Studio 等「OpenAI 兼容」供应商填 http://127.0.0.1:8787/openai/v1。',
+    models: [
+      'deepseek-v4-pro', 'deepseek-v4.1-flash', 'glm-5.3', 'glm-5.3-flash', 'glm-5.2',
+      'kimi-k3', 'kimi-k2.7-code', 'longcat-2.0', 'longcat-2.5-preview-free',
+      'mimo-v2.5', 'mimo-v2.5-pro', 'mimo-v2.6-flash', 'mimo-v2.6-pro',
+      'hy3', 'hy4-preview', 'step-5-preview-free', 'cat-jam-free', 'space-bunny',
+    ],
+  },
+  responses: {
+    note: 'OpenAI Responses 组：给 Codex CLI（wire_api = responses）用，Base URL 同上 /openai/v1。GPT / Grok / Muse 在部分地区会 403。',
+    models: ['gpt-6-luna', 'gpt-5.6-luna', 'grok-4.7', 'muse-spark-1.3-contributor', 'muse-spark-1.2-contributor'],
+  },
+  anthropic: {
+    note: 'Anthropic Messages 组：Claude Code / ZCode 的 Anthropic 供应商填 http://127.0.0.1:8787/anthropic。',
+    models: ['claude-haiku-5-5', 'qwen3.8-max', 'qwen3.8-flash', 'qwen3.7-plus', 'minimax-m3'],
+  },
+  google: {
+    note: 'Google Generative AI 组：ZCode / Google SDK 填 http://127.0.0.1:8787/google。需先在 OpenCode 工作区允许「训练数据的付费端点」。',
+    models: ['gemini-4-argon-contributor'],
+  },
+}
+
+let activeProto = 'openai'
+
 function usageErrorText(code) {
   if (!code) return ''
   if (USAGE_ERROR_TEXT[code]) return USAGE_ERROR_TEXT[code]
@@ -241,12 +269,11 @@ function renderProxy() {
   const tag = $('#proxy-state')
   tag.className = `tag ${running ? 'on' : 'off'}`
   tag.textContent = running ? `运行中 · ${state.proxy.port}` : '未启动'
-  const url = state.proxy.baseUrl || '—'
-  $('#proxy-url').value = url
-  $('#copy-url').disabled = !state.proxy.baseUrl
-  $('#proxy-env').textContent = state.proxy.baseUrl
-    ? `OPENAI_BASE_URL=${state.proxy.baseUrl}`
-    : '代理未启动，客户端无法连接'
+  const bases = state.proxy.bases || {}
+  $('#base-openai').value = bases.openai || '—'
+  $('#base-anthropic').value = bases.anthropic || '—'
+  $('#base-google').value = bases.google || '—'
+  for (const button of document.querySelectorAll('[data-copy]')) button.disabled = !running
   $('#proxy-toggle').textContent = running ? '停止代理' : '启动代理'
   const error = $('#proxy-error')
   if (state.proxy.error) {
@@ -288,6 +315,27 @@ function renderLogs() {
       h('span', { class: 'log-msg' }, entry.message),
     ))
   }
+}
+
+function renderModels() {
+  const group = MODEL_CATALOG[activeProto]
+  if (!group) return
+  for (const chip of document.querySelectorAll('#proto-tabs .chip')) {
+    chip.classList.toggle('active', chip.dataset.proto === activeProto)
+  }
+  const list = $('#model-list')
+  clear(list)
+  for (const id of group.models) {
+    list.append(h('div', {
+      class: 'model-item',
+      dataset: { model: id },
+      title: '点击复制模型 ID',
+    },
+      h('span', { class: 'model-id' }, id),
+      h('span', { class: 'copy-hint' }, '复制'),
+    ))
+  }
+  $('#model-note').textContent = group.note
 }
 
 function render() {
@@ -469,19 +517,40 @@ function setupEvents() {
     }
   })
 
-  $('#copy-url').addEventListener('click', async () => {
-    if (!state.proxy.baseUrl) return
+  $('#proxy-card').addEventListener('click', async event => {
+    const button = event.target.closest('[data-copy]')
+    if (!button) return
+    const url = (state.proxy.bases || {})[button.dataset.copy]
+    if (!url) return
     try {
-      await api.copy(state.proxy.baseUrl)
-      toast('代理地址已复制')
+      await api.copy(url)
+      toast('Base URL 已复制')
+    } catch (error) {
+      fail(error)
+    }
+  })
+
+  $('#proto-tabs').addEventListener('click', event => {
+    const chip = event.target.closest('.chip[data-proto]')
+    if (!chip) return
+    activeProto = chip.dataset.proto
+    renderModels()
+  })
+
+  $('#model-list').addEventListener('click', async event => {
+    const item = event.target.closest('.model-item')
+    if (!item) return
+    try {
+      await api.copy(item.dataset.model)
+      toast(`已复制模型 ID：${item.dataset.model}`)
     } catch (error) {
       fail(error)
     }
   })
 
   $('#proxy-health').addEventListener('click', () => {
-    if (!state.proxy.baseUrl) return fail(new Error('代理未启动'))
-    api.openExternal(state.proxy.baseUrl.replace(/\/v1$/, '/pool/health')).catch(fail)
+    if (!state.proxy.running) return fail(new Error('代理未启动'))
+    api.openExternal(`http://${state.proxy.host}:${state.proxy.port}/pool/health`).catch(fail)
   })
 
   $('#clear-logs').addEventListener('click', async () => {
@@ -514,6 +583,7 @@ async function boot() {
     return
   }
   setupEvents()
+  renderModels()
   try {
     state = await api.state()
     render()
