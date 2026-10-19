@@ -1,0 +1,20 @@
+{
+  "name": "aipool",
+  "version": "0.1.0",
+  "description": "N 个上游 LLM Key → 一个局域网 OpenAI/Anthropic 兼容端点 + 一个 token，带自动故障切换与配额感知",
+  "type": "module",
+  "license": "MIT",
+  "engines": { "node": ">=20" },
+  "bin": { "aipool": "./bin/aipool.mjs" },
+  "exports": {
+    ".": "./src/server.mjs",
+    "./config": "./src/config.mjs",
+    "./pool": "./src/pool.mjs"
+  },
+  "files": ["bin", "src", "docs", "examples", "README.md"],
+  "scripts": {
+    "start": "node bin/aipool.mjs serve",
+    "test": "node --test test/*.test.mjs"
+  },
+  "keywords": ["llm", "gateway", "openai-compatible", "anthropic", "key-pool", "failover", "dsh", "lan", "mac-mini"]
+}

@@ -1,0 +1,106 @@
+{
+  "version": 1,
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8787,
+    "allowFrom": ["127.0.0.1/32", "::1/128", "192.168.0.0/16", "10.0.0.0/8", "172.16.0.0/12"],
+    "trustProxy": false,
+    "maxBodyBytes": 67108864,
+    "dashboard": true
+  },
+  "auth": {
+    "adminToken": "adm_replace_me_with_a_generated_token",
+    "tokens": [
+      {
+        "id": "tk_00000001",
+        "name": "macbook",
+        "hash": "REPLACE_WITH_SHA256_OF_CLIENT_TOKEN",
+        "createdAt": "2026-01-01T00:00:00.000Z",
+        "lastUsedAt": null,
+        "requests": 0,
+        "disabled": false,
+        "rpm": null,
+        "models": null
+      }
+    ]
+  },
+  "routing": {
+    "defaultModel": "auto",
+    "maxAttempts": 4,
+    "retryDelaysMs": [150, 500, 1200, 2000],
+    "streamIdleTimeoutMs": 300000,
+    "requestTimeoutMs": 600000,
+    "exposeModels": "all"
+  },
+  "cooldown": {
+    "rateLimitMs": 20000,
+    "serverMs": 15000,
+    "transportMs": 8000,
+    "authMs": 900000,
+    "quotaMs": 600000
+  },
+  "providers": [
+    {
+      "id": "opencode-go",
+      "name": "OpenCode Go",
+      "type": "openai",
+      "baseUrl": "https://opencode.ai/zen/go/v1",
+      "chatPath": "/chat/completions",
+      "modelsPath": "/models",
+      "authHeader": "bearer",
+      "priority": 10,
+      "timeoutMs": 300000,
+      "models": [{ "id": "deepseek-v4-pro", "name": "DeepSeek V4 Pro" }],
+      "modelsUrl": "https://opencode.ai/zen/go/v1/models",
+      "usageUrl": "https://opencode.ai/zen/go/v1/usage",
+      "usageRefreshMs": 60000,
+      "preemptAtPercent": 100,
+      "headers": {},
+      "keys": [
+        { "id": "k1", "label": "账号A", "key": "${OPENCODE_GO_KEY_A}", "enabled": true, "weight": 1 },
+        { "id": "k2", "label": "账号B", "key": "${OPENCODE_GO_KEY_B}", "enabled": true, "weight": 1 }
+      ]
+    },
+    {
+      "id": "ark",
+      "name": "Ark Agent Plan",
+      "type": "anthropic",
+      "baseUrl": "https://ark.cn-beijing.volces.com/api/plan",
+      "chatPath": "/v1/messages",
+      "modelsPath": "/v1/models",
+      "authHeader": "bearer",
+      "anthropicVersion": "2023-06-01",
+      "priority": 50,
+      "timeoutMs": 300000,
+      "models": [
+        { "id": "deepseek-v4-pro", "name": "DeepSeek V4 Pro" },
+        { "id": "doubao-seed-2.1-pro", "name": "Doubao Seed 2.1 Pro" },
+        { "id": "glm-5.3", "name": "GLM 5.3" }
+      ],
+      "usageUrl": null,
+      "headers": {},
+      "keys": [
+        { "id": "k1", "label": "方舟", "key": "env:ARK_AGENT_PLAN_CN_API_KEY", "enabled": true, "weight": 1 }
+      ]
+    },
+    {
+      "id": "ollama",
+      "name": "Ollama (本机)",
+      "type": "openai",
+      "baseUrl": "http://127.0.0.1:11434/v1",
+      "chatPath": "/chat/completions",
+      "modelsPath": "/models",
+      "authHeader": "bearer",
+      "priority": 900,
+      "timeoutMs": 300000,
+      "models": [],
+      "usageUrl": null,
+      "headers": {},
+      "keys": [{ "id": "local", "label": "local", "key": "ollama", "enabled": false, "weight": 1 }]
+    }
+  ],
+  "aliases": {
+    "gpt-4o": ["opencode-go/glm-5.3", "ark/doubao-seed-2.1-pro"],
+    "auto": ["opencode-go/deepseek-v4-pro", "ark/deepseek-v4-pro"]
+  }
+}

@@ -1,0 +1,134 @@
+diff --git a/index.js b/index.js
+index 157f3f3..f71d7d4 100644
+--- a/index.js
++++ b/index.js
+@@ -356,7 +356,14 @@ class OpenCodeGoPoolAdapter extends LlmAdapter {
+         yield finish
+         return
+       }
+-      // Degenerate inner adapter that ended without a terminal finish.
++      // Degenerate inner adapter that ended without a terminal finish. The
++      // caller still needs exactly one terminal chunk, and the last classified
++      // failure is more useful than a generic message.
++      if (lastErrorFinish !== null) {
++        yield lastErrorFinish
++        return
++      }
++      yield dryPoolFinish('dsh-opencode-go: the provider stream ended without a finish chunk')
+       return
+     }
+     // The bound ran out while a rotation-driven silent retry was still pending.
+diff --git a/models.js b/models.js
+index a6e88dc..7561050 100644
+--- a/models.js
++++ b/models.js
+@@ -65,24 +65,25 @@ export async function fetchModels({ baseUrl, apiKey, timeoutMs = 15000, fetchImp
+   const headers = { Accept: 'application/json' }
+   if (apiKey) headers.Authorization = `Bearer ${apiKey}`
+   let res
+-  try {
+-    res = await impl(baseUrl, { headers, signal: controller.signal })
+-  } catch {
+-    throw new ModelsError('network', `models request failed: ${baseUrl}`)
+-  } finally {
+-    clearTimeout(timer)
+-  }
+-  if (res.status === 401) {
+-    throw new ModelsError('unauthorized', 'models endpoint rejected the key (401)')
+-  }
+-  if (!res.ok) {
+-    throw new ModelsError(`http-${res.status}`, `models endpoint answered HTTP ${res.status}`)
+-  }
+   let body
+   try {
++    res = await impl(baseUrl, { headers, signal: controller.signal })
++    if (res.status === 401) {
++      await res.body?.cancel?.().catch(() => {})
++      throw new ModelsError('unauthorized', 'models endpoint rejected the key (401)')
++    }
++    if (!res.ok) {
++      await res.body?.cancel?.().catch(() => {})
++      throw new ModelsError(`http-${res.status}`, `models endpoint answered HTTP ${res.status}`)
++    }
++    // Same rule as usage.js: the timer has to cover the body read.
+     body = await res.json()
+-  } catch {
++  } catch (error) {
++    if (error instanceof ModelsError) throw error
++    if (res === undefined) throw new ModelsError('network', `models request failed: ${baseUrl}`)
+     throw new ModelsError('bad-json', 'models endpoint answered with non-JSON')
++  } finally {
++    clearTimeout(timer)
+   }
+   const raw = Array.isArray(body) ? body : (body && Array.isArray(body.data) ? body.data : [])
+   const models = []
+diff --git a/pool.js b/pool.js
+index d1005b1..a30836f 100644
+--- a/pool.js
++++ b/pool.js
+@@ -161,11 +161,16 @@ export class KeyPool {
+       this.states.set(entry.id, prev ?? { state: HEALTHY, usage: null, lastFailure: null, failureStreak: 0 })
+       if (this.states.get(entry.id).failureStreak === undefined) this.states.get(entry.id).failureStreak = 0
+     }
++    // Keep the states of keys that are merely absent from THIS list (the
++    // settings overlay may not have arrived yet, or the user is mid-edit):
++    // dropping them here would resurrect dead accounts on the next boot.
++    this.orphans = new Map([...before].filter(([id]) => !this.states.has(id)))
+     if (this.activeId !== null && !this.states.has(this.activeId)) this.activeId = null
+     if (this.activeId === null || !this.isUsable(this.activeId)) {
+       this.activeId = this.pickFirstUsableId()
+     }
+-    this.persist()
++    // An empty list is never a reason to overwrite the state file.
++    if (this.keys.length > 0) this.persist()
+   }
+ 
+   // ---- reads ---------------------------------------------------------------
+diff --git a/usage.js b/usage.js
+index 5515de9..74ff5a4 100644
+--- a/usage.js
++++ b/usage.js
+@@ -48,27 +48,29 @@ export async function fetchUsage({ baseUrl, apiKey, timeoutMs = 15000, fetchImpl
+   const controller = new AbortController()
+   const timer = setTimeout(() => controller.abort(), timeoutMs)
+   let res
++  let body
+   try {
+     res = await impl(baseUrl, {
+       headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' },
+       signal: controller.signal,
+     })
+-  } catch {
+-    throw new UsageError('network', `usage request failed: ${baseUrl}`)
+-  } finally {
+-    clearTimeout(timer)
+-  }
+-  if (res.status === 401) {
+-    throw new UsageError('unauthorized', 'usage endpoint rejected the key (401)')
+-  }
+-  if (!res.ok) {
+-    throw new UsageError(`http-${res.status}`, `usage endpoint answered HTTP ${res.status}`)
+-  }
+-  let body
+-  try {
++    if (res.status === 401) {
++      await res.body?.cancel?.().catch(() => {})
++      throw new UsageError('unauthorized', 'usage endpoint rejected the key (401)')
++    }
++    if (!res.ok) {
++      await res.body?.cancel?.().catch(() => {})
++      throw new UsageError(`http-${res.status}`, `usage endpoint answered HTTP ${res.status}`)
++    }
++    // Read the body INSIDE the timer window: a response whose headers arrive
++    // and whose body never does must not be able to hang status() forever.
+     body = await res.json()
+-  } catch {
++  } catch (error) {
++    if (error instanceof UsageError) throw error
++    if (res === undefined) throw new UsageError('network', `usage request failed: ${baseUrl}`)
+     throw new UsageError('bad-json', 'usage endpoint answered with non-JSON')
++  } finally {
++    clearTimeout(timer)
+   }
+   const usage = body && typeof body === 'object' && body.usage ? body.usage : body
+   return {
