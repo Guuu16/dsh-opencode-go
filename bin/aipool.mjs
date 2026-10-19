@@ -248,12 +248,20 @@ async function cmdInit({ flags }) {
   }
   const adminToken = randomToken('adm_')
   const raw = starterConfig({ adminToken })
-  if (flags.port) raw.server.port = Number(flags.port)
+  if (flags.port !== undefined) {
+    const port = Number(flags.port)
+    if (!Number.isInteger(port) || port < 0 || port > 65_535) {
+      throw new ConfigError(`--port 必须是 0..65535 的整数（收到 ${JSON.stringify(flags.port)}）`)
+    }
+    raw.server.port = port
+  }
   const { record, plain } = createClientToken({ auth: { tokens: [] } }, {
     name: flags.name || 'first-client',
   })
   raw.auth.tokens = [record]
-  persistConfig({ ...raw, configPath: path }, path)
+  // Never write a config the daemon cannot load.
+  const validated = normalizeConfig(raw, { source: path })
+  persistConfig({ ...validated, configPath: path }, path)
   ok(`配置已写入 ${path}`)
   info('')
   info(`${color.bold('下一步：')}`)
@@ -383,6 +391,7 @@ async function cmdKey({ flags, positional }) {
     persistConfig(config)
     const nudged = nudgeDaemon()
     ok(`已添加 ${provider.id}/${record.id} (${label}) ${color.dim(maskSecret(secret))}`)
+    if (secret.length < 8) info(color.yellow(`  ! key 只有 ${secret.length} 个字符，确认不是粘贴被截断`))
     if (nudged) info(color.dim('已通知运行中的 daemon 热加载'))
     return
   }
@@ -618,7 +627,28 @@ function quotaCell(quota) {
 async function cmdConfig({ flags }) {
   const config = requireConfig()
   if (flags.json) {
-    info(JSON.stringify(config, null, 2))
+    if (flags.raw === true) {
+      info(JSON.stringify(config, null, 2))
+      return
+    }
+    // Default must be safe to paste into an issue: secrets stay masked, and
+    // the admin token is not printed at all.
+    info(JSON.stringify({
+      ...config,
+      auth: {
+        adminToken: `adm_…${String(config.auth.adminToken).slice(-4)}`,
+        adminTokenRef: config.auth.adminTokenRef,
+        tokens: config.auth.tokens.map(token => ({ ...token, hash: `${token.hash.slice(0, 8)}…` })),
+      },
+      providers: config.providers.map(provider => ({
+        ...provider,
+        keys: provider.keys.map(key => ({
+          ...key,
+          key: maskSecret(key.key),
+          keyRef: key.keyRef ?? null,
+        })),
+      })),
+    }, null, 2))
     return
   }
   info(color.dim(`配置文件 ${config.configPath}`))

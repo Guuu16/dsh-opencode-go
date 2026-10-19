@@ -582,6 +582,7 @@ export async function* anthropicStreamToOpenAI(readable, { model, ctx }) {
         message: data.error?.message ?? 'upstream stream error',
         type: data.error?.type ?? 'api_error',
       }
+      ctx.errorForwarded = true
       yield sseData({ error: { message: ctx.error.message, type: ctx.error.type } })
       return
     }
@@ -625,6 +626,7 @@ export async function* openAIStreamToAnthropic(readable, { model, ctx }) {
     if (!data) continue
     if (data.error) {
       ctx.error = { message: data.error.message ?? 'upstream stream error', type: data.error.type ?? 'api_error' }
+      ctx.errorForwarded = true
       yield sseEvent('error', { type: 'error', error: { type: 'api_error', message: ctx.error.message } })
       return
     }
@@ -707,6 +709,8 @@ export async function* passthroughStream(readable, { providerType, ctx }) {
     if (!data) return
     if (data.error) {
       ctx.error = { message: data.error.message ?? 'upstream stream error', type: data.error.type ?? 'api_error' }
+      // passthrough forwards the frame untouched, so nothing else must emit it.
+      ctx.errorForwarded = true
       return
     }
     if (providerType === 'anthropic') {
@@ -746,5 +750,29 @@ export function emptyStreamContext() {
     usage: { ...EMPTY_USAGE },
     finishReason: null,
     error: null,
+    // true when the upstream error frame has already been forwarded to the
+    // client verbatim, so callers must not synthesize a second one.
+    errorForwarded: false,
   }
+}
+
+/**
+ * Does the first SSE chunk already carry an upstream error? Providers that
+ * answer 200 and then an error event must still be rotated.
+ */
+export function looksLikeErrorEvent(text) {
+  if (typeof text !== 'string' || text.length === 0) return null
+  const trimmed = text.trim()
+  if (trimmed.startsWith('event: error')) return { message: 'upstream emitted an error event' }
+  if (trimmed.startsWith('data:')) {
+    const payload = trimmed.slice(5).trim()
+    if (payload === '[DONE]') return null
+    try {
+      const parsed = JSON.parse(payload)
+      if (parsed?.error) return { message: parsed.error.message ?? 'upstream error', type: parsed.error.type }
+    } catch {
+      return null
+    }
+  }
+  return null
 }

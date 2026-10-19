@@ -14,7 +14,7 @@
 import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { KeyPool, classifyFailure } from './pool.mjs'
-import { buildUpstreamRequest, joinUrl } from './protocol.mjs'
+import { buildUpstreamRequest, joinUrl, looksLikeErrorEvent } from './protocol.mjs'
 import {
   GatewayError,
   aipoolHome,
@@ -59,13 +59,24 @@ function writeCatalogCache(cache) {
   }
 }
 
+/** Read at most `limit` bytes of an error body; never buffer a huge page. */
 async function readErrorBody(response, limit = 8192) {
+  if (!response.body) return ''
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let text = ''
   try {
-    const text = await response.text()
-    return text.slice(0, limit)
+    while (text.length < limit) {
+      const { done, value } = await reader.read()
+      if (done) break
+      text += decoder.decode(value, { stream: true })
+    }
   } catch {
-    return ''
+    return text.slice(0, limit)
+  } finally {
+    await reader.cancel().catch(() => {})
   }
+  return text.slice(0, limit)
 }
 
 /**
@@ -324,89 +335,138 @@ export class Router {
     const attempts = []
     const maxAttempts = Math.max(1, Math.min(this.config.routing.maxAttempts, 10))
     const delays = this.config.routing.retryDelaysMs
+    const decoder = new TextDecoder()
     let lastFailure = null
 
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       const candidate = this.nextCandidate(targets, tried)
       if (!candidate) break
       const { provider, modelId, key } = candidate
-      const pairId = `${provider.id}\u0000${key.id}`
-      tried.add(pairId)
+      tried.add(`${provider.id}\u0000${key.id}`)
       const pool = this.pool(provider.id)
       pool.onAttempt(key.id)
       if (attempt > 0) this.counters.retries += 1
 
       const controller = new AbortController()
-      let timedOut = false
-      const timer = setTimeout(() => {
-        timedOut = true
-        controller.abort()
-      }, provider.timeoutMs)
       const onClientAbort = () => controller.abort()
+      // Kept alive on the success path: the caller owns the response body, and
+      // a client disconnect or the overall request timeout must still be able
+      // to stop the upstream stream.
       clientSignal?.addEventListener?.('abort', onClientAbort, { once: true })
-
       const attemptStart = Date.now()
+      let timedOut = false
+      let failure = null
+      let response = null
+      let peeked = null
+
       try {
-        const request = buildUpstreamRequest({
-          provider,
-          apiKey: key.key,
-          modelId,
-          canonical: { ...canonical, model: modelId, stream },
-          signal: controller.signal,
-        })
-        const response = await fetch(request.url, request.init)
-        clearTimeout(timer)
+        const headerTimer = setTimeout(() => {
+          timedOut = true
+          controller.abort()
+        }, provider.timeoutMs)
+        try {
+          const request = buildUpstreamRequest({
+            provider,
+            apiKey: key.key,
+            modelId,
+            canonical: { ...canonical, model: modelId, stream },
+            signal: controller.signal,
+          })
+          response = await fetch(request.url, request.init)
+        } finally {
+          clearTimeout(headerTimer)
+        }
+
         if (!response.ok) {
           const raw = await readErrorBody(response)
-          const failure = classifyFailure({
+          const classified = classifyFailure({
             status: response.status,
             body: parseMaybeJSON(raw),
             cooldowns: this.config.cooldown,
             retryAfterMs: parseRetryAfter(response.headers.get('retry-after')),
           })
-          pool.onFailure(key.id, failure)
-          lastFailure = { ...failure, provider: provider.id, key: key.id, status: response.status }
-          attempts.push({ provider: provider.id, key: key.id, status: response.status, code: failure.code, kind: failure.kind, ms: Date.now() - attemptStart })
-          log('warn', `attempt ${attempt + 1}: ${provider.id}/${key.id} → HTTP ${response.status} (${failure.kind})`)
-          if (failure.kind === 'model') this.modelMisses.set(`${provider.id}\u0000${modelId}`, Date.now() + MODEL_MISS_TTL_MS)
-          if (!failure.retryable) {
-            throw this.failureToError(failure, { provider, key, status: response.status, attempts })
+          failure = { ...classified, status: response.status }
+          if (classified.kind === 'model') {
+            this.modelMisses.set(`${provider.id}\u0000${modelId}`, Date.now() + MODEL_MISS_TTL_MS)
           }
-          this.onEvent({ type: 'retry', ...attempts[attempts.length - 1] })
-          continue
+        } else if (stream) {
+          // A 200 is not a success yet: peek the first SSE chunk so a provider
+          // that answers 200 and then an error event still rotates inside the
+          // same attempt budget instead of leaking a half-broken stream.
+          const reader = response.body.getReader()
+          const first = await reader.read()
+          const text = first.done ? '' : decoder.decode(first.value, { stream: true })
+          const upstreamError = looksLikeErrorEvent(text)
+          if (upstreamError) {
+            await reader.cancel().catch(() => {})
+            failure = {
+              kind: 'transport',
+              code: 'STREAM_ERROR',
+              retryable: true,
+              rotateKey: true,
+              cooldownMs: this.config.cooldown.transportMs,
+              message: upstreamError.message,
+              status: 200,
+            }
+          } else {
+            peeked = { reader, first, firstText: text }
+          }
         }
+      } catch (error) {
+        clientSignal?.removeEventListener?.('abort', onClientAbort)
+        if (error instanceof GatewayError) {
+          controller.abort()
+          throw error
+        }
+        if (clientSignal?.aborted) {
+          controller.abort()
+          throw new GatewayError('客户端已断开', { status: 499, code: 'CLIENT_CLOSED_REQUEST', type: 'api_error' })
+        }
+        const code = timedOut ? 'TIMEOUT' : (error?.code ?? error?.name ?? 'TRANSPORT')
+        failure = { ...classifyFailure({ status: 0, code, cooldowns: this.config.cooldown }), status: 0 }
+      }
 
+      if (failure === null) {
         return {
           response,
           provider,
           key,
           modelId,
           requestedModel: canonical.model ?? this.config.routing.defaultModel,
-          dialect: request.dialect,
+          dialect: provider.type,
           attempts,
           startedAt,
           attemptStartedAt: attemptStart,
+          reader: peeked?.reader ?? null,
+          first: peeked?.first ?? null,
+          firstText: peeked?.firstText ?? '',
           releaseAbort: () => clientSignal?.removeEventListener?.('abort', onClientAbort),
           abort: () => controller.abort(),
         }
-      } catch (error) {
-        clearTimeout(timer)
-        clientSignal?.removeEventListener?.('abort', onClientAbort)
-        if (error instanceof GatewayError) throw error
-        if (clientSignal?.aborted) {
-          throw new GatewayError('客户端已断开', { status: 499, code: 'CLIENT_CLOSED_REQUEST', type: 'api_error' })
-        }
-        const code = timedOut ? 'TIMEOUT' : (error?.code ?? error?.name ?? 'TRANSPORT')
-        const failure = classifyFailure({ status: 0, code, cooldowns: this.config.cooldown })
-        pool.onFailure(key.id, failure)
-        lastFailure = { ...failure, provider: provider.id, key: key.id, status: 0 }
-        attempts.push({ provider: provider.id, key: key.id, status: 0, code: failure.code, kind: failure.kind, ms: Date.now() - attemptStart })
-        log('warn', `attempt ${attempt + 1}: ${provider.id}/${key.id} → ${code} (${failure.message})`)
-        this.onEvent({ type: 'retry', ...attempts[attempts.length - 1] })
-      } finally {
-        clearTimeout(timer)
-        clientSignal?.removeEventListener?.('abort', onClientAbort)
       }
+
+      // Failure: drop the listener (the next attempt installs its own), make
+      // sure the socket is released, and count the attempt.
+      clientSignal?.removeEventListener?.('abort', onClientAbort)
+      controller.abort()
+      pool.onFailure(key.id, failure)
+      lastFailure = { ...failure, provider: provider.id, key: key.id }
+      attempts.push({
+        provider: provider.id,
+        key: key.id,
+        status: failure.status ?? 0,
+        code: failure.code,
+        kind: failure.kind,
+        ms: Date.now() - attemptStart,
+      })
+      log('warn', `attempt ${attempt + 1}: ${provider.id}/${key.id} → ${failure.status ? `HTTP ${failure.status}` : failure.code} (${failure.kind})`)
+
+      if (!failure.retryable) {
+        throw this.failureToError(failure, { provider, key, status: failure.status ?? null, attempts })
+      }
+
+      // Back off before the next attempt — for HTTP failures as well as
+      // transport ones, otherwise a 429 turns into an instant key sweep.
       const delay = delays[Math.min(attempt, delays.length - 1)] ?? 0
       if (delay > 0) await sleep(delay, clientSignal)
       if (clientSignal?.aborted) {
@@ -415,7 +475,44 @@ export class Router {
     }
 
     if (lastFailure) throw this.failureToError(lastFailure, { attempts })
-    throw new GatewayError('没有可用的 key 完成这次请求', { status: 503, code: 'NO_USABLE_KEY', type: 'service_unavailable', detail: { attempts } })
+
+    const hint = this.cooldownHint()
+    if (hint.keys > 0 && hint.cooldownMs > 0) {
+      throw new GatewayError(
+        `所有 Key 都在冷却中，最快 ${Math.ceil(hint.cooldownMs / 1000)} 秒后恢复`,
+        {
+          status: 429,
+          code: 'ALL_KEYS_COOLING',
+          type: 'rate_limit_error',
+          detail: { retryAfterMs: hint.cooldownMs, attempts },
+        },
+      )
+    }
+    throw new GatewayError('没有可用的 key 完成这次请求', {
+      status: 503,
+      code: 'NO_USABLE_KEY',
+      type: 'service_unavailable',
+      detail: { attempts },
+    })
+  }
+
+  /** Shortest remaining cooldown across every configured key, for Retry-After. */
+  cooldownHint() {
+    const now = Date.now()
+    let keys = 0
+    let cooldownMs = 0
+    for (const provider of this.config.providers) {
+      const pool = this.pool(provider.id)
+      if (!pool) continue
+      for (const entry of pool.entries) {
+        keys += 1
+        const state = pool.stateOf(entry.id)
+        if (!state) continue
+        const remaining = state.cooldownUntil > now ? state.cooldownUntil - now : 0
+        if (remaining > 0 && (cooldownMs === 0 || remaining < cooldownMs)) cooldownMs = remaining
+      }
+    }
+    return { keys, cooldownMs }
   }
 
   failureToError(failure, { provider = null, key = null, status = null, attempts = [] } = {}) {

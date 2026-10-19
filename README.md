@@ -169,6 +169,10 @@ claude
 | 402、调用额度用完（429 + `quota` 文案） | 额度耗尽 | 标记 `exhausted`，换 Key | 10 分钟 + 用量接口报告恢复即复活 |
 | 普通 429（每分钟限流） | 被限流 | 换 Key | 20 秒（有 `Retry-After` 就按它，上限 10 分钟） |
 | 5xx、连接重置、超时 | 上游有病 | 换 Key | 15 秒 / 8 秒（同样尊重 `Retry-After`） |
+
+- 每次换号之间会按 `routing.retryDelaysMs` 退避（默认 150/500/1200/2000ms），429 不会变成对下一个账号的秒级连打。
+- 全部 Key 都在冷却时返回 **429 + `Retry-After`**（而不是 503），SDK 会按提示退避而不是判定服务不可用。
+- 客户端断开或超过 `requestTimeoutMs` 会真的掐断上游连接，不会让已经没人要的流继续跑完并计费。
 | 404 + `model not found` | 这个供应商没这个模型 | **换供应商**，不惩罚 Key | 5 分钟内跳过该组合 |
 | 400 / 413 / 422 | 请求本身有问题 | **不重试**，原样返回给客户端 | — |
 
@@ -270,7 +274,7 @@ aipool doctor                                   体检：配置、Node、端口�
 }
 ```
 
-- `aliases` 是**跨供应商兜底**的显式写法：别名 → 有序的 `provider/model` 列表，前一个死光自动下一个。
+- `aliases` 是**跨供应商兜底**的显式写法：别名 → 有序的 `provider/model` 列表，前一个死光自动下一个。`aliases.auto` 也生效，会覆盖内置的「按优先级取第一个模型」。
 - `auto` 是保留虚拟模型：优先用 `aliases.auto`，没写就按 provider 优先级取各自目录里的第一个模型。
 
 ---
@@ -298,7 +302,9 @@ node bin/aipool.mjs logs -f
 
 - 客户端 token 只存 sha256，`token ls` 永远看不到明文；泄漏就 `token revoke`
 - admin token 与客户端 token 分离：面板接口不认客户端 token
-- 上游 Key 只存在 `~/.aipool/config.json`（0600），接口和日志里只出现 `sk-abcd…wxyz`
+- 上游 Key 只存在 `~/.aipool/config.json`（0600），接口和日志里只出现 `sk-abcd…wxyz`；用 `${ENV}` / `env:ENV` 引用时，**面板操作或 `token new` 回写配置也不会把明文写进文件**，环境变量轮换继续生效
+- `aipool config --json` 默认脱敏（admin token 只留后四位、Key 掩码、token 只留哈希前缀）；要原样输出加 `--raw`
+- `/v1/usage` 需要 **admin token**：它会列出所有 Key 的 id/label/错误，属于运维数据
 - `allowFrom` 按 CIDR 拦来源 IP；`trustProxy` 默认关，防止伪造 `X-Forwarded-For`
 - **token 只能放在请求头里**（`Authorization` 或 `x-api-key`），查询串 `?token=` 只在面板地址里由浏览器自己解析，服务端 API 不接受——避免 token 落进访问日志
 - 面板 HTML 由服务端产出，所有数据走 `textContent` 注入，无 `innerHTML` 拼接
@@ -321,7 +327,7 @@ node bin/aipool.mjs logs -f
 node --test test/*.test.mjs
 ```
 
-35 项：池状态机（轮换/冷却/复活/配额预判/限流与额度分流/Retry-After）、协议双向翻译（含 SSE、stream_options 开关）、端到端网关（鉴权、429 换号、跨供应商兜底、400 不重试、流式、流空闲超时、413、Anthropic 双向、token 模型白名单）、重启后状态恢复与过期数据丢弃。全部用本地假上游，不需要任何真 Key。
+44 项：池状态机（轮换/冷却/复活/配额预判/限流与额度分流/Retry-After）、协议双向翻译（含 SSE、stream_options 开关）、端到端网关（鉴权、429 换号与退避、跨供应商兜底、400 不重试、流式、客户端断开掐上游、流空闲超时、413、Anthropic 双向、token 模型白名单、全冷却 429、200+error 的尝试预算、错误帧不重复）、配置（env 引用回写、CIDR 校验、aliases.auto）、重启后状态恢复与过期数据丢弃。全部用本地假上游，不需要任何真 Key。
 
 ---
 

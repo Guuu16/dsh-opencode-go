@@ -145,11 +145,16 @@ export function compileAllowList(entries = []) {
     const [base, bits] = entry.split('/')
     const type = isIPv4(base) ? 'ipv4' : isIPv6(base) ? 'ipv6' : null
     if (type === null) continue
-    if (bits === undefined) list.addAddress(base, type)
-    else {
-      const prefix = Number(bits)
-      if (!Number.isInteger(prefix)) continue
-      list.addSubnet(base, prefix, type)
+    try {
+      if (bits === undefined) list.addAddress(base, type)
+      else {
+        const prefix = Number(bits)
+        if (!Number.isInteger(prefix)) continue
+        list.addSubnet(base, prefix, type)
+      }
+    } catch {
+      // normalizeConfig rejects malformed entries up front; a defensive skip
+      // here keeps a hand-edited config from crashing the listener.
     }
   }
   return {

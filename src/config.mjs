@@ -8,6 +8,7 @@
  */
 
 import { randomBytes } from 'node:crypto'
+import { isIPv4, isIPv6 } from 'node:net'
 import { existsSync, readFileSync } from 'node:fs'
 import { basename, dirname } from 'node:path'
 import {
@@ -65,6 +66,17 @@ export const DEFAULT_SERVER = {
   trustProxy: false,
   maxBodyBytes: 64 * 1024 * 1024,
   dashboard: true,
+}
+
+/**
+ * A secret can be written as a literal, `${VAR}` or `env:VAR`. Resolve it for
+ * runtime use but remember the original reference, so persisting the config
+ * back (a dashboard click, `token new`) never materializes the secret into the
+ * file — that would silently disable env rotation.
+ */
+function resolveSecret(raw, where) {
+  const isRef = typeof raw === 'string' && (raw.startsWith('env:') || (raw.startsWith('${') && raw.endsWith('}')))
+  return { value: envRefValue(raw, where), ref: isRef ? raw : null }
 }
 
 function envRefValue(raw, where) {
@@ -137,12 +149,13 @@ function normalizeProvider(raw, index, seenIds) {
     if (!ID_RE.test(keyId)) throw new ConfigError(`${kWhere}.id must match ${ID_RE} (got "${keyId}")`)
     if (seenKeyIds.has(keyId)) throw new ConfigError(`${kWhere}.id "${keyId}" is duplicated`)
     seenKeyIds.add(keyId)
-    const rawKey = envRefValue(entry.key ?? entry.apiKey ?? '', `${kWhere}.key`)
+    const resolvedKey = resolveSecret(entry.key ?? entry.apiKey ?? '', `${kWhere}.key`)
     const label = stringOr(entry.label, keyId, `${kWhere}.label`)
     return {
       id: keyId,
       label,
-      key: rawKey,
+      key: resolvedKey.value,
+      keyRef: resolvedKey.ref,
       enabled: entry.enabled !== false,
       weight: numberIn(entry.weight, 1, 0.1, 100, `${kWhere}.weight`),
     }
@@ -223,6 +236,22 @@ function normalizeToken(raw, index, seenIds) {
   }
 }
 
+function assertCidr(entry) {
+  const value = String(entry).trim()
+  if (value === '*' || value === '0.0.0.0/0' || value === '::/0') return value
+  const [base, bits] = value.split('/')
+  const type = isIPv4(base) ? 4 : isIPv6(base) ? 6 : null
+  if (type === null) throw new ConfigError(`server.allowFrom entry "${value}" is not an IP or CIDR`)
+  if (bits !== undefined) {
+    const prefix = Number(bits)
+    const max = type === 4 ? 32 : 128
+    if (!Number.isInteger(prefix) || prefix < 0 || prefix > max) {
+      throw new ConfigError(`server.allowFrom entry "${value}" must use a prefix between 0 and ${max}`)
+    }
+  }
+  return value
+}
+
 function normalizeAliases(raw) {
   if (raw === undefined) return {}
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
@@ -231,8 +260,11 @@ function normalizeAliases(raw) {
   const out = {}
   for (const [name, value] of Object.entries(raw)) {
     if (!ALIAS_RE.test(name)) throw new ConfigError(`aliases["${name}"]: name must match ${ALIAS_RE}`)
-    if (name === 'auto') continue // reserved virtual model
     const list = Array.isArray(value) ? value : [value]
+    if (name === 'auto' && list.length === 0) {
+      out.auto = []
+      continue
+    }
     if (list.length === 0 || list.some(item => typeof item !== 'string' || !item.includes('/'))) {
       throw new ConfigError(`aliases["${name}"] must be "provider/model" or an array of them`)
     }
@@ -253,14 +285,16 @@ export function normalizeConfig(raw, { source = 'config' } = {}) {
     host: stringOr(serverRaw.host, DEFAULT_SERVER.host, 'server.host'),
     // 0 = let the OS pick a free port (used by tests and by `aipool serve --port 0`).
     port: numberIn(serverRaw.port, DEFAULT_SERVER.port, 0, 65_535, 'server.port'),
-    allowFrom: Array.isArray(serverRaw.allowFrom) ? serverRaw.allowFrom.map(item => String(item)) : DEFAULT_SERVER.allowFrom,
+    allowFrom: (Array.isArray(serverRaw.allowFrom) ? serverRaw.allowFrom : DEFAULT_SERVER.allowFrom).map(assertCidr),
     trustProxy: serverRaw.trustProxy === true,
     maxBodyBytes: numberIn(serverRaw.maxBodyBytes, DEFAULT_SERVER.maxBodyBytes, 1024, 512 * 1024 * 1024, 'server.maxBodyBytes'),
     dashboard: serverRaw.dashboard !== false,
   }
 
   const authRaw = raw.auth ?? {}
-  const adminToken = envRefValue(stringOr(authRaw.adminToken, '', 'auth.adminToken'), 'auth.adminToken')
+  const rawAdmin = stringOr(authRaw.adminToken, '', 'auth.adminToken')
+  const resolvedAdmin = resolveSecret(rawAdmin, 'auth.adminToken')
+  const adminToken = resolvedAdmin.value
   if (!adminToken.startsWith('adm_') || adminToken.length < 20) {
     throw new ConfigError('auth.adminToken must be a generated admin token (run `aipool init`)')
   }
@@ -301,7 +335,7 @@ export function normalizeConfig(raw, { source = 'config' } = {}) {
     version: CONFIG_VERSION,
     configPath: configPath(),
     server,
-    auth: { adminToken, tokens },
+    auth: { adminToken, adminTokenRef: resolvedAdmin.ref, tokens },
     routing,
     cooldown,
     providers,
@@ -332,7 +366,10 @@ export function persistConfig(config, path = config.configPath ?? configPath()) 
   writeJSON(path, {
     version: CONFIG_VERSION,
     server: config.server,
-    auth: config.auth,
+    auth: {
+      adminToken: config.auth.adminTokenRef ?? config.auth.adminToken,
+      tokens: config.auth.tokens,
+    },
     routing: config.routing,
     cooldown: config.cooldown,
     providers: config.providers.map(provider => ({
@@ -354,7 +391,13 @@ export function persistConfig(config, path = config.configPath ?? configPath()) 
       preemptAtPercent: provider.preemptAtPercent,
       streamUsage: provider.streamUsage,
       headers: provider.headers,
-      keys: provider.keys,
+      keys: provider.keys.map(key => ({
+        id: key.id,
+        label: key.label,
+        key: key.keyRef ?? key.key,
+        enabled: key.enabled,
+        weight: key.weight,
+      })),
     })),
     aliases: config.aliases,
   }, 0o600)

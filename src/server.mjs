@@ -71,6 +71,14 @@ function readBody(req, limit) {
   })
 }
 
+function parseJSONBody(raw, what = '请求体') {
+  try {
+    return JSON.parse(raw)
+  } catch {
+    throw new GatewayError(`${what}不是合法 JSON`, { status: 400, code: 'INVALID_JSON', type: 'invalid_request_error' })
+  }
+}
+
 /** reader.read() bounded by the stream idle timeout, not just the request one. */
 function readWithIdle(reader, timeoutMs, onIdle) {
   if (!(timeoutMs > 0)) return reader.read()
@@ -156,22 +164,6 @@ function clientAddress(req, trustProxy) {
   return req.socket.remoteAddress ?? ''
 }
 
-function looksLikeErrorEvent(text) {
-  if (typeof text !== 'string' || text.length === 0) return null
-  const trimmed = text.trim()
-  if (trimmed.startsWith('event: error')) return { message: 'upstream emitted an error event' }
-  if (trimmed.startsWith('data:')) {
-    const payload = trimmed.slice(5).trim()
-    if (payload === '[DONE]') return null
-    try {
-      const parsed = JSON.parse(payload)
-      if (parsed?.error) return { message: parsed.error.message ?? 'upstream error', type: parsed.error.type }
-    } catch {
-      return null
-    }
-  }
-  return null
-}
 
 /**
  * Build the gateway. `start()` binds; `stop()` closes; `reload(config)`
@@ -321,29 +313,11 @@ export async function createGateway({ config, log: logger = log, restoreState = 
         return
       }
 
-      // Streaming: peek the first chunk so an upstream that answers 200 with an
-      // error event still rotates instead of leaking a half-broken stream.
-      const decoder = new TextDecoder()
-      let reader = candidate.response.body.getReader()
+      // Router.open() already peeked the first SSE chunk and rotated on an
+      // early error, so the attempt budget is exactly maxAttempts.
+      const reader = candidate.reader ?? candidate.response.body.getReader()
+      const first = candidate.first ?? { done: true, value: undefined }
       upstreamReader = reader
-      let first = await reader.read()
-      let firstText = first.done ? '' : decoder.decode(first.value, { stream: true })
-      const earlyError = looksLikeErrorEvent(firstText)
-      if (earlyError) {
-        await reader.cancel().catch(() => {})
-        router.pool(candidate.provider.id)?.onFailure(candidate.key.id, {
-          kind: 'transport',
-          code: 'STREAM_ERROR',
-          rotateKey: true,
-          cooldownMs: config.cooldown.transportMs,
-          message: earlyError.message,
-        })
-        candidate = await router.open({ canonical, stream, clientSignal: clientAbort.signal })
-        reader = candidate.response.body.getReader()
-        upstreamReader = reader
-        first = await reader.read()
-        firstText = first.done ? '' : decoder.decode(first.value, { stream: true })
-      }
 
       res.writeHead(200, {
         'content-type': dialect === 'anthropic' ? 'text/event-stream; charset=utf-8' : 'text/event-stream; charset=utf-8',
@@ -383,7 +357,9 @@ export async function createGateway({ config, log: logger = log, restoreState = 
       completed = true
       if (ctx.error) {
         router.finish({ candidate, usage: ctx.usage, error: Object.assign(new Error(ctx.error.message), { code: 'STREAM_ERROR' }), startedAt: candidate.attemptStartedAt, streamed: true })
-        if (!res.writableEnded) {
+        // The dialect translators already emitted the error frame; only the
+        // paths that swallowed it need one synthesized here.
+        if (!res.writableEnded && !ctx.errorForwarded) {
           if (dialect === 'anthropic') {
             res.write(sseEvent('error', { type: 'error', error: { type: 'api_error', message: ctx.error.message } }))
           } else {
@@ -417,7 +393,13 @@ export async function createGateway({ config, log: logger = log, restoreState = 
           streamed: stream,
         })
       }
-      if (!res.headersSent) sendJSON(res, err.status, errorPayload(dialect, err), { 'x-aipool-error': err.code })
+      const retryAfterMs = Number(err.detail?.retryAfterMs) || 0
+      if (!res.headersSent) {
+        sendJSON(res, err.status, errorPayload(dialect, err), {
+          'x-aipool-error': err.code,
+          ...(retryAfterMs > 0 ? { 'retry-after': String(Math.max(1, Math.ceil(retryAfterMs / 1000))) } : {}),
+        })
+      }
       else if (!res.writableEnded) {
         if (dialect === 'anthropic') {
           res.write(sseEvent('error', { type: 'error', error: { type: 'api_error', message: err.message } }))
@@ -429,6 +411,7 @@ export async function createGateway({ config, log: logger = log, restoreState = 
       }
     } finally {
       clearTimeout(overallTimer)
+      candidate?.releaseAbort?.()
       if (countingStream) {
         countingStream = false
         router.counters.activeStreams = Math.max(0, router.counters.activeStreams - 1)
@@ -437,7 +420,7 @@ export async function createGateway({ config, log: logger = log, restoreState = 
   }
 
   async function handleAdminAction(req, res) {
-    const body = JSON.parse(await readBody(req, config.server.maxBodyBytes))
+    const body = parseJSONBody(await readBody(req, config.server.maxBodyBytes))
     const action = body?.action
     const providerId = body?.provider
     const keyId = body?.key
@@ -506,6 +489,11 @@ export async function createGateway({ config, log: logger = log, restoreState = 
     const dialect = dialectOf(pathname)
     const address = clientAddress(req, config.server.trustProxy)
 
+    if (!allowList.check(address) && !allowList.allowAll) {
+      sendJSON(res, 403, errorPayload(dialect, new GatewayError(`来源地址 ${address} 不在 server.allowFrom 里`, { status: 403, code: 'IP_NOT_ALLOWED', type: 'permission_error' })))
+      return
+    }
+
     if (req.method === 'OPTIONS') {
       res.writeHead(204, {
         'access-control-allow-origin': '*',
@@ -514,11 +502,6 @@ export async function createGateway({ config, log: logger = log, restoreState = 
         'access-control-max-age': '86400',
       })
       res.end()
-      return
-    }
-
-    if (!allowList.check(address) && !allowList.allowAll) {
-      sendJSON(res, 403, errorPayload(dialect, new GatewayError(`来源地址 ${address} 不在 server.allowFrom 里`, { status: 403, code: 'IP_NOT_ALLOWED', type: 'permission_error' })))
       return
     }
 
@@ -556,14 +539,15 @@ export async function createGateway({ config, log: logger = log, restoreState = 
 
     if (pathname === '/v1/models' && req.method === 'GET') {
       const auth = authenticate(req, url)
-      const allowed = auth.token?.models ?? null
+      const allowed = auth.token?.models?.length ? auth.token.models : null
       const data = modelList().filter(entry => allowed === null || allowed.includes(entry.id))
       sendJSON(res, 200, { object: 'list', data })
       return
     }
 
     if (pathname === '/v1/usage' && req.method === 'GET') {
-      authenticate(req, url)
+      // Key ids, labels and last errors are operator data, not client data.
+      authenticate(req, url, { requireAdmin: true })
       const snapshot = router.snapshot()
       sendJSON(res, 200, {
         counters: snapshot.counters,
@@ -588,7 +572,7 @@ export async function createGateway({ config, log: logger = log, restoreState = 
     if (pathname === '/v1/messages/count_tokens' && req.method === 'POST') {
       const auth = authenticate(req, url)
       const raw = await readBody(req, config.server.maxBodyBytes)
-      const body = JSON.parse(raw)
+      const body = parseJSONBody(raw)
       const text = JSON.stringify(body.messages ?? '') + JSON.stringify(body.system ?? '')
       // Deliberately rough: tokenizers differ per upstream and clients use this
       // only for budgeting. ~3.5 chars/token is closer than chars/4 for CJK.
@@ -601,12 +585,7 @@ export async function createGateway({ config, log: logger = log, restoreState = 
     if ((pathname === '/v1/chat/completions' || pathname === '/v1/messages') && req.method === 'POST') {
       const auth = authenticate(req, url)
       const raw = await readBody(req, config.server.maxBodyBytes)
-      let body
-      try {
-        body = JSON.parse(raw)
-      } catch {
-        throw new GatewayError('请求体不是合法 JSON', { status: 400, code: 'INVALID_JSON', type: 'invalid_request_error' })
-      }
+      const body = parseJSONBody(raw)
       if (!body || typeof body !== 'object' || !Array.isArray(body.messages)) {
         throw new GatewayError('缺少 messages 数组', { status: 400, code: 'INVALID_REQUEST', type: 'invalid_request_error' })
       }
@@ -626,13 +605,20 @@ export async function createGateway({ config, log: logger = log, restoreState = 
 
   const server = createServer((req, res) => {
     const started = Date.now()
+    const pathname = (() => {
+      try {
+        return new URL(req.url ?? '/', 'http://localhost').pathname
+      } catch {
+        return '/'
+      }
+    })()
     res.on('finish', () => {
-      if (req.url === '/healthz' || req.url?.startsWith('/admin/status')) return
-      logger('debug', `${req.method} ${req.url} → ${res.statusCode} ${Date.now() - started}ms`)
+      if (pathname === '/healthz' || pathname === '/admin/status') return
+      logger('debug', `${req.method} ${pathname} → ${res.statusCode} ${Date.now() - started}ms`)
     })
     route(req, res).catch(error => {
       const err = error instanceof GatewayError ? error : new GatewayError(error?.message ?? 'internal error', { status: 500, code: 'INTERNAL', type: 'api_error' })
-      if (err.status >= 500) logger('error', `${req.method} ${req.url} → ${err.code}: ${err.message}`)
+      if (err.status >= 500) logger('error', `${req.method} ${pathname} → ${err.code}: ${err.message}`)
       if (!res.headersSent) {
         const dialect = dialectOf(new URL(req.url ?? '/', 'http://localhost').pathname)
         sendJSON(res, err.status, errorPayload(dialect, err), { 'x-aipool-error': err.code })
@@ -654,9 +640,12 @@ export async function createGateway({ config, log: logger = log, restoreState = 
     },
     /** Hot-apply a new config (SIGHUP / `aipool key add` while running). */
     reload(nextConfig) {
+      // Compile and validate before touching live state: a bad entry must
+      // leave the running gateway untouched, not half-switched.
+      const nextAllowList = compileAllowList(nextConfig.server.allowFrom)
+      router.updateConfig(nextConfig)
       config = nextConfig
-      allowList = compileAllowList(config.server.allowFrom)
-      router.updateConfig(config)
+      allowList = nextAllowList
       poller.router = router
       return config
     },
@@ -673,6 +662,9 @@ export async function createGateway({ config, log: logger = log, restoreState = 
       stateTimer.unref?.()
       router.refreshCatalog().catch(() => {})
       const address = server.address()
+      // port 0 lets the OS choose; snapshots and the dashboard must show the
+      // port that is actually listening, not the request.
+      config.server.port = address.port
       const host = lanAddressHint(config.server.host)
       logger('info', `aipool listening on http://${config.server.host}:${address.port}  →  http://${host}:${address.port}/v1`)
       logger('info', `dashboard: http://${host}:${address.port}/?token=<admin token>`)

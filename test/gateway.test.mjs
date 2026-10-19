@@ -487,3 +487,165 @@ test('a stalled upstream stream times out instead of hanging the client', async 
     await upstream.close()
   }
 })
+
+test('a client disconnect stops the upstream stream', async () => {
+  let upstreamClosed = false
+  const upstream = await startFake({
+    'GET /v1/models': ({ res }) => json(res, 200, { object: 'list', data: [{ id: 'test-model' }] }),
+    'POST /v1/chat/completions': ({ res }) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' })
+      const timer = setInterval(() => {
+        if (res.destroyed || res.writableEnded) return
+        res.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: 'x' }, finish_reason: null }] })}\n\n`)
+      }, 40)
+      res.on('close', () => {
+        upstreamClosed = true
+        clearInterval(timer)
+      })
+    },
+  })
+  const config = makeConfig({
+    providers: [{ id: 'p1', type: 'openai', baseUrl: `${upstream.url}/v1`, models: [{ id: 'test-model' }], keys: [{ id: 'k1', label: 'A', key: 'sk-a' }] }],
+  })
+  const gw = await bootGateway(config)
+  try {
+    const controller = new AbortController()
+    const response = await fetch(`${gw.base}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${CLIENT_TOKEN}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'test-model', stream: true, messages: [{ role: 'user', content: 'hi' }] }),
+      signal: controller.signal,
+    })
+    const reader = response.body.getReader()
+    await reader.read()
+    controller.abort()
+    for (let i = 0; i < 40 && !upstreamClosed; i += 1) await new Promise(resolve => setTimeout(resolve, 50))
+    assert.equal(upstreamClosed, true, 'upstream socket was left open')
+    assert.equal(gw.gateway.router.counters.ok, 0, 'aborted request counted as success')
+  } finally {
+    await gw.close()
+    await upstream.close()
+  }
+})
+
+test('a 429 waits for the configured backoff before the next key', async () => {
+  let calls = 0
+  const upstream = await startFake({
+    'GET /v1/models': ({ res }) => json(res, 200, { object: 'list', data: [{ id: 'test-model' }] }),
+    'POST /v1/chat/completions': ({ res, body, key }) => {
+      calls += 1
+      if (key === 'sk-a') return json(res, 429, { error: { message: 'rate limit: 20 rpm' } })
+      return json(res, 200, openAICompletion({ model: body.model }))
+    },
+  })
+  const config = makeConfig({
+    providers: [{
+      id: 'p1',
+      type: 'openai',
+      baseUrl: `${upstream.url}/v1`,
+      models: [{ id: 'test-model' }],
+      keys: [{ id: 'k1', label: 'A', key: 'sk-a' }, { id: 'k2', label: 'B', key: 'sk-b' }],
+    }],
+    routing: { retryDelaysMs: [300] },
+  })
+  const gw = await bootGateway(config)
+  try {
+    const started = Date.now()
+    const response = await gw.request('/v1/chat/completions', {
+      body: { model: 'test-model', messages: [{ role: 'user', content: 'hi' }] },
+    })
+    const elapsed = Date.now() - started
+    assert.equal(response.status, 200)
+    assert.equal(response.headers.get('x-aipool-route'), 'p1/k2')
+    assert.ok(elapsed >= 280, `no backoff applied (${elapsed}ms, 2 calls=${calls})`)
+  } finally {
+    await gw.close()
+    await upstream.close()
+  }
+})
+
+test('all keys cooling is a 429 with Retry-After, not a 503', async () => {
+  const upstream = await startFake({
+    'GET /v1/models': ({ res }) => json(res, 200, { object: 'list', data: [{ id: 'test-model' }] }),
+    'POST /v1/chat/completions': ({ res }) => json(res, 429, { error: { message: 'insufficient_quota' } }),
+  })
+  const config = makeConfig({
+    providers: [{ id: 'p1', type: 'openai', baseUrl: `${upstream.url}/v1`, models: [{ id: 'test-model' }], keys: [{ id: 'k1', label: 'A', key: 'sk-a' }] }],
+    routing: { maxAttempts: 1 },
+    cooldown: { quotaMs: 60_000, rateLimitMs: 60_000, serverMs: 60_000, transportMs: 60_000, authMs: 60_000 },
+  })
+  const gw = await bootGateway(config)
+  try {
+    const first = await gw.request('/v1/chat/completions', { body: { model: 'test-model', messages: [{ role: 'user', content: 'x' }] } })
+    assert.equal(first.status, 429)
+    const callsAfterFirst = upstream.requests.filter(entry => entry.method === 'POST').length
+
+    const second = await gw.request('/v1/chat/completions', { body: { model: 'test-model', messages: [{ role: 'user', content: 'x' }] } })
+    assert.equal(second.status, 429)
+    assert.equal((await second.json()).error.code, 'ALL_KEYS_COOLING')
+    assert.ok(Number(second.headers.get('retry-after')) > 0)
+    assert.equal(upstream.requests.filter(entry => entry.method === 'POST').length, callsAfterFirst, 'still hammering a cooling pool')
+  } finally {
+    await gw.close()
+    await upstream.close()
+  }
+})
+
+test('an upstream that answers 200 then an error still respects maxAttempts', async () => {
+  const upstream = await startFake({
+    'GET /v1/models': ({ res }) => json(res, 200, { object: 'list', data: [{ id: 'test-model' }] }),
+    'POST /v1/chat/completions': ({ res }) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' })
+      res.end(`data: ${JSON.stringify({ error: { message: 'upstream exploded', type: 'api_error' } })}\n\n`)
+    },
+  })
+  const config = makeConfig({
+    providers: [{
+      id: 'p1',
+      type: 'openai',
+      baseUrl: `${upstream.url}/v1`,
+      models: [{ id: 'test-model' }],
+      keys: [{ id: 'k1', label: 'A', key: 'sk-a' }, { id: 'k2', label: 'B', key: 'sk-b' }, { id: 'k3', label: 'C', key: 'sk-c' }],
+    }],
+    routing: { maxAttempts: 2, retryDelaysMs: [0] },
+  })
+  const gw = await bootGateway(config)
+  try {
+    const response = await gw.request('/v1/chat/completions', {
+      body: { model: 'test-model', stream: true, messages: [{ role: 'user', content: 'hi' }] },
+    })
+    assert.equal(response.status, 502)
+    const posts = upstream.requests.filter(entry => entry.method === 'POST').length
+    assert.equal(posts, 2, `maxAttempts=2 but ${posts} upstream calls were made`)
+  } finally {
+    await gw.close()
+    await upstream.close()
+  }
+})
+
+test('a mid-stream upstream error is forwarded exactly once', async () => {
+  const upstream = await startFake({
+    'GET /v1/models': ({ res }) => json(res, 200, { object: 'list', data: [{ id: 'test-model' }] }),
+    'POST /v1/chat/completions': ({ res }) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' })
+      res.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: 'half' }, finish_reason: null }] })}\n\n`)
+      res.write(`data: ${JSON.stringify({ error: { message: 'connection exploded', type: 'api_error' } })}\n\n`)
+      res.end()
+    },
+  })
+  const config = makeConfig({
+    providers: [{ id: 'p1', type: 'openai', baseUrl: `${upstream.url}/v1`, models: [{ id: 'test-model' }], keys: [{ id: 'k1', label: 'A', key: 'sk-a' }] }],
+  })
+  const gw = await bootGateway(config)
+  try {
+    const response = await gw.request('/v1/chat/completions', {
+      body: { model: 'test-model', stream: true, messages: [{ role: 'user', content: 'hi' }] },
+    })
+    const text = await response.text()
+    assert.match(text, /half/)
+    assert.equal((text.match(/"error"/g) ?? []).length, 1, `duplicate error frames:\n${text}`)
+  } finally {
+    await gw.close()
+    await upstream.close()
+  }
+})

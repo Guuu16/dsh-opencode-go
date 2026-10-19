@@ -14,7 +14,7 @@ import { sha256 } from '../src/util.mjs'
 export const ADMIN_TOKEN = `adm_${'T'.repeat(32)}`
 export const CLIENT_TOKEN = 'sk-aipool-test-token-123456'
 
-export function makeConfig({ providers, routing = {}, server = {}, tokens = null, aliases = {} }) {
+export function makeConfig({ providers, routing = {}, server = {}, tokens = null, aliases = {}, cooldown = null }) {
   return normalizeConfig({
     version: 1,
     server: { host: '127.0.0.1', port: 0, allowFrom: ['127.0.0.1/32'], ...server },
@@ -30,7 +30,7 @@ export function makeConfig({ providers, routing = {}, server = {}, tokens = null
       }],
     },
     routing: { maxAttempts: 4, retryDelaysMs: [0], ...routing },
-    cooldown: { rateLimitMs: 50, serverMs: 50, transportMs: 50, authMs: 50, quotaMs: 50 },
+    cooldown: cooldown ?? { rateLimitMs: 50, serverMs: 50, transportMs: 50, authMs: 50, quotaMs: 50 },
     providers,
     aliases,
   })
