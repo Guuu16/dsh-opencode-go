@@ -41,7 +41,9 @@ const REGION_HINTS = [
   'unsupported_country_region_territory',
   'country, region, or territory not supported',
   'not available in your region',
+  'not available in your country',
   'region not supported',
+  'regionerror',
 ]
 
 /**

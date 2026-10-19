@@ -57,18 +57,25 @@ claude-haiku-5-5   qwen3.8-max   qwen3.8-flash   qwen3.7-plus   minimax-m3
 gemini-4-argon-contributor
 ```
 
-**地区/隐私提示（本机实测）**
+**实测结果（逐个模型，max_tokens=4/8）**
 
-| 模型 | 协议 | 实测结果 |
+| 模型 | 协议 | 结果 |
 |---|---|---|
-| `deepseek-v4-pro` | OpenAI Chat | 200 |
-| `claude-haiku-5-5` | Anthropic | 200 |
-| `qwen3.8-flash` | Anthropic | 200 |
-| `gpt-6-luna` | OpenAI Responses | 403 `unsupported_country_region_territory`（地区限制） |
-| `gemini-4-argon-contributor` | Google | 400：需在 OpenCode 工作区允许「训练数据的付费端点」 |
+| `deepseek-v4-pro` / `deepseek-v4.1-flash` | OpenAI Chat | ✅ 200 |
+| `glm-5.3` / `glm-5.3-flash` / `glm-5.2` | OpenAI Chat | ✅ 200 |
+| `kimi-k3` / `kimi-k2.7-code` | OpenAI Chat | ✅ 200 |
+| `longcat-2.0` / `mimo-v2.6-flash` / `hy3` | OpenAI Chat | ✅ 200 |
+| `step-5-preview-free` | OpenAI Chat | ❌ 400 `Model is unavailable.`（模型已下架；账号未受影响） |
+| `claude-haiku-5-5` | Anthropic | ✅ 200 |
+| `qwen3.8-max` / `qwen3.8-flash` / `qwen3.7-plus` | Anthropic | ✅ 200 |
+| `minimax-m3` | Anthropic | ✅ 200 |
+| `grok-4.7` | OpenAI Responses | ✅ 200 |
+| `gpt-6-luna` / `gpt-5.6-luna` | OpenAI Responses | ⚠️ 403 地区限制 |
+| `muse-spark-1.3-contributor` | OpenAI Responses | ⚠️ 403 `RegionError`（地区限制） |
+| `gemini-4-argon-contributor` | Google | ⚠️ 400：需在 OpenCode 工作区允许「训练数据的付费端点」 |
 
-- GPT / Grok / Muse 在部分地区不可用。网关原样透传 403，**不会**把账号标失效。
-- Gemini 的 400 是工作区隐私设置，不是 Key 或协议错误。
+- 地区限制的 403 会原样透传，**不会**把账号标失效（这一点专门测过：连续请求后两个账号仍是 healthy）。
+- 没测到的模型（`mimo-v2.5`、`mimo-v2.5-pro`、`mimo-v2.6-pro`、`longcat-2.5-preview-free`、`hy4-preview`、`cat-jam-free`、`space-bunny`、`muse-spark-1.2`）不代表不可用，只是没有逐个发请求。
 
 ---
 

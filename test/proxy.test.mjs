@@ -213,6 +213,7 @@ test('only loopback web origins get CORS', () => {
 
 test('a region-restricted model is not treated as an invalid credential', async t => {
   assert.equal(classifyResponse(403, '{"error":{"code":"unsupported_country_region_territory"}}'), 'REGION')
+  assert.equal(classifyResponse(403, '{"type":"error","error":{"type":"RegionError","message":"This model is not available in your country"}}'), 'REGION')
   assert.equal(classifyResponse(401, '{"error":{"message":"Invalid credential"}}'), 'INVALID_CREDENTIAL')
 
   let failures = 0
