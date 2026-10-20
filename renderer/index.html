@@ -49,8 +49,8 @@
             <span id="proxy-state" class="tag">未启动</span>
           </div>
           <p class="hint">
-            按客户端协议选 Base URL，API Key 随便填（例如 sk-pool）。网关会注入当前账号的真实 Key
-            和会话头；额度耗尽或 Key 失效时，在同一次请求内换号重试。
+            按客户端协议选 Base URL，API Key 填下面的访问令牌。网关校验通过后注入当前账号的真实 Key
+            和会话头；令牌不对返回 401。额度耗尽或 Key 失效时，在同一次请求内换号重试。
           </p>
           <div class="base-list">
             <div class="base-row">
@@ -68,7 +68,14 @@
               <input id="base-google" readonly value="—">
               <button class="btn tiny" data-copy="google">复制</button>
             </div>
+            <div class="base-row">
+              <span class="base-label">令牌</span>
+              <input id="proxy-token" readonly value="—">
+              <button class="btn tiny" data-copy="token">复制</button>
+              <button id="regen-token" class="btn tiny ghost">重置</button>
+            </div>
           </div>
+          <p class="hint">客户端 API Key 填上面的访问令牌（默认开启校验）；令牌对不上会返回 401。</p>
           <p class="hint">Claude / Qwen / MiniMax 用 Anthropic；Gemini 用 Google；其余多数用 OpenAI。完整模型对照见 docs/CONFIG.md。</p>
           <div class="row">
             <button id="proxy-toggle" class="btn">停止代理</button>
@@ -127,6 +134,7 @@
             </div>
           </div>
           <div class="checks">
+            <label class="check"><input id="set-proxy-auth" type="checkbox"> 代理要求访问令牌（推荐；客户端 API Key 填令牌）</label>
             <label class="check"><input id="set-auto-invalid" type="checkbox"> 额度接口返回 401 时自动标记 Key 失效</label>
             <label class="check"><input id="set-login" type="checkbox"> 开机自动启动（安装版）</label>
             <label class="check"><input id="set-tray" type="checkbox"> 关闭窗口时隐藏到系统托盘</label>

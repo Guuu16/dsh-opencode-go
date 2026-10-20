@@ -1,5 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import http from 'node:http'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -84,4 +85,24 @@ test('snapshot never exposes the secret', async t => {
   const serialized = JSON.stringify(controller.snapshot())
   assert.equal(serialized.includes('sk-super-secret-key-123'), false)
   assert.equal(serialized.includes('cipher'), false)
+})
+
+test('listModels presents the gateway token when the proxy is running', async t => {
+  const seen = []
+  const server = http.createServer((req, res) => {
+    seen.push(req.headers['x-pool-token'])
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ data: [{ id: 'm-one' }, { id: 'm-two' }] }))
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => new Promise(resolve => { server.closeAllConnections?.(); server.close(resolve) }))
+
+  const { store, controller } = makeController(async () => usage)
+  t.after(() => controller.dispose())
+  store.state.settings.proxyToken = 'sk-pool-controller-test-1234'
+  controller.proxyInfo = { running: true, host: '127.0.0.1', port: server.address().port }
+
+  const result = await controller.listModels()
+  assert.deepEqual(result.models.map(model => model.id), ['m-one', 'm-two'])
+  assert.equal(seen[0], 'sk-pool-controller-test-1234')
 })

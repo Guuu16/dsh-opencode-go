@@ -13,7 +13,16 @@
 | Anthropic Messages | `http://127.0.0.1:8787/anthropic` | Claude Code、ZCode、Anthropic SDK |
 | Google Generative AI | `http://127.0.0.1:8787/google` | ZCode、Google GenAI SDK |
 
-API Key 一律填占位符 `sk-pool`（代理会替换成当前账号的真实 Key）。`/v1` 仍然可用，但只等价于 OpenAI Chat 组。
+API Key 填桌面版里的**访问令牌**（`sk-pool-...`，默认开启校验），网关校验通过后会替换成当前账号的真实 Key。`/v1` 仍然可用，但只等价于 OpenAI Chat 组。
+
+## 访问令牌（默认开启）
+
+客户端把桌面版「本地代理 → 令牌」里的 `sk-pool-...` 当作 API Key 填。网关校验通过后才注入上游 Key；没带或不对一律 `401 UNAUTHORIZED`。
+
+- 重置：点令牌旁的「重置」，所有客户端要同步更新
+- 关闭校验：切号策略里取消「代理要求访问令牌」（不建议）
+- 也支持 `X-Pool-Token: sk-pool-...` 请求头
+- 健康检查：`http://127.0.0.1:8787/pool/health?token=<令牌>`
 
 桌面版的「模型与协议」卡片启动时会自动调用官方 `/models`，每 6 小时刷新一次，也可以点「同步」；新模型按名称推断协议并标「推断」。下面的 29 个是 pi-ai 目录里有明确协议的；接口当前返回 37 个，多出来的就是推断项。
 
@@ -90,7 +99,7 @@ DSH 的自定义供应商是**按协议**添加的，一个供应商只能覆盖
 ```text
 设置 → 模型 → 添加供应商 → 自定义 / OpenAI 兼容
 Base URL: http://127.0.0.1:8787/openai/v1
-API Key:  sk-pool
+API Key:  sk-pool-xxxxxxxx…
 模型:     deepseek-v4-pro、glm-5.3、kimi-k3、mimo-v2.6-pro …
 ```
 
@@ -99,7 +108,7 @@ API Key:  sk-pool
 ```text
 添加供应商 → Anthropic
 Base URL: http://127.0.0.1:8787/anthropic
-API Key:  sk-pool
+API Key:  sk-pool-xxxxxxxx…
 模型:     claude-haiku-5-5、qwen3.8-max、qwen3.8-flash、qwen3.7-plus、minimax-m3
 ```
 
@@ -108,7 +117,7 @@ API Key:  sk-pool
 ```text
 添加供应商 → Google / Gemini
 Base URL: http://127.0.0.1:8787/google
-API Key:  sk-pool
+API Key:  sk-pool-xxxxxxxx…
 模型:     gemini-4-argon-contributor
 ```
 
@@ -136,7 +145,7 @@ wire_api = "responses"
 PowerShell 设置占位 Key：
 
 ```powershell
-setx OPENCODE_POOL_KEY "sk-pool"
+setx OPENCODE_POOL_KEY "sk-pool-xxxxxxxx…"
 ```
 
 可用模型（Responses 组）：
@@ -155,7 +164,7 @@ Claude Code 走 Anthropic Messages，网关的 `/anthropic` 正好对应：
 
 ```powershell
 $env:ANTHROPIC_BASE_URL = "http://127.0.0.1:8787/anthropic"
-$env:ANTHROPIC_AUTH_TOKEN = "sk-pool"
+$env:ANTHROPIC_AUTH_TOKEN = "sk-pool-xxxxxxxx…"
 $env:ANTHROPIC_MODEL = "claude-haiku-5-5"
 claude
 ```
@@ -164,7 +173,7 @@ claude
 
 ```bash
 export ANTHROPIC_BASE_URL="http://127.0.0.1:8787/anthropic"
-export ANTHROPIC_AUTH_TOKEN="sk-pool"
+export ANTHROPIC_AUTH_TOKEN="sk-pool-xxxxxxxx…"
 export ANTHROPIC_MODEL="claude-haiku-5-5"
 claude
 ```
@@ -199,7 +208,7 @@ ZCode 的「Add Provider」支持三种协议，一个 provider 一种。UI 路�
 Name:     OpenCode Go Pool (OpenAI)
 Protocol: OpenAI Chat Completions
 Base URL: http://127.0.0.1:8787/openai/v1
-API Key:  sk-pool
+API Key:  sk-pool-xxxxxxxx…
 Add Model: deepseek-v4-pro、glm-5.3、kimi-k3、mimo-v2.6-pro …
 ```
 
@@ -209,7 +218,7 @@ Add Model: deepseek-v4-pro、glm-5.3、kimi-k3、mimo-v2.6-pro …
 Name:     OpenCode Go Pool (Anthropic)
 Protocol: Anthropic Messages
 Base URL: http://127.0.0.1:8787/anthropic
-API Key:  sk-pool
+API Key:  sk-pool-xxxxxxxx…
 Add Model: claude-haiku-5-5、qwen3.8-max、qwen3.8-flash、qwen3.7-plus、minimax-m3
 ```
 
@@ -219,7 +228,7 @@ Add Model: claude-haiku-5-5、qwen3.8-max、qwen3.8-flash、qwen3.7-plus、minim
 Name:     OpenCode Go Pool (Gemini)
 Protocol: Google Generative AI
 Base URL: http://127.0.0.1:8787/google
-API Key:  sk-pool
+API Key:  sk-pool-xxxxxxxx…
 Add Model: gemini-4-argon-contributor
 ```
 
@@ -238,7 +247,7 @@ Add Model: gemini-4-argon-contributor
           "providerName": "OpenCode Go Pool (OpenAI)",
           "enabled": true,
           "config": {
-            "access": { "type": "api-key", "apiKey": "sk-pool" },
+            "access": { "type": "api-key", "apiKey": "sk-pool-xxxxxxxx…" },
             "api": { "type": "openai-chat-completions", "baseUrl": "http://127.0.0.1:8787/openai/v1" },
             "personalModelIds": ["deepseek-v4-pro", "glm-5.3", "kimi-k3"],
             "visibility": "visible"
@@ -262,7 +271,7 @@ Add Model: gemini-4-argon-contributor
 
 ```text
 Base URL: http://127.0.0.1:8787/openai/v1
-API Key:  sk-pool
+API Key:  sk-pool-xxxxxxxx…
 Model:    Chat 组模型 ID
 ```
 
@@ -270,7 +279,7 @@ OpenAI SDK：
 
 ```python
 from openai import OpenAI
-client = OpenAI(base_url="http://127.0.0.1:8787/openai/v1", api_key="sk-pool")
+client = OpenAI(base_url="http://127.0.0.1:8787/openai/v1", api_key="sk-pool-xxxxxxxx…")
 client.chat.completions.create(model="deepseek-v4-pro", messages=[{"role": "user", "content": "hi"}])
 ```
 
@@ -278,7 +287,7 @@ Anthropic SDK：
 
 ```python
 import anthropic
-client = anthropic.Anthropic(base_url="http://127.0.0.1:8787/anthropic", api_key="sk-pool")
+client = anthropic.Anthropic(base_url="http://127.0.0.1:8787/anthropic", api_key="sk-pool-xxxxxxxx…")
 client.messages.create(model="claude-haiku-5-5", max_tokens=64, messages=[{"role": "user", "content": "hi"}])
 ```
 
@@ -299,4 +308,4 @@ client.messages.create(model="claude-haiku-5-5", max_tokens=64, messages=[{"role
 
 - 只监听 `127.0.0.1`；
 - 跨域只允许 `localhost` / `127.0.0.1` 的网页；
-- 明文 Key 只在桌面版主进程（Windows DPAPI），客户端只看到 `sk-pool`。
+- 明文 Key 只在桌面版主进程（Windows DPAPI）；客户端只看到访问令牌，令牌不对网关直接 401。

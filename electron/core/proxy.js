@@ -21,7 +21,7 @@ import {
 const HOP_BY_HOP = new Set([
   'host', 'authorization', 'content-length', 'connection', 'keep-alive',
   'proxy-authenticate', 'proxy-authorization', 'te', 'trailers',
-  'transfer-encoding', 'upgrade', 'accept-encoding', 'x-api-key', 'x-goog-api-key',
+  'transfer-encoding', 'upgrade', 'accept-encoding', 'x-api-key', 'x-goog-api-key', 'x-pool-token',
 ])
 
 const OPENCODE_ORIGIN = 'https://opencode.ai'
@@ -175,6 +175,21 @@ function errorPayload(code, message, extra = {}) {
   }
 }
 
+/**
+ * The token a client presented. Every client supports an API key, so the
+ * gateway token rides the same field: Authorization (OpenAI), x-api-key
+ * (Anthropic), x-goog-api-key or ?key= (Google). X-Pool-Token also works for
+ * clients that support custom headers.
+ */
+export function presentedToken(req, url) {
+  const header = req.headers['x-pool-token']
+    || req.headers.authorization
+    || req.headers['x-api-key']
+    || req.headers['x-goog-api-key']
+  if (header) return String(header).replace(/^Bearer\s+/i, '').trim()
+  return url.searchParams.get('token') || url.searchParams.get('key') || ''
+}
+
 /** Map a client path onto the upstream base, accepting /v1-prefixed and bare paths. */
 export function upstreamPathFor(pathname) {
   if (pathname === '/' || pathname === '/v1' || pathname === '/v1/') return '/'
@@ -195,6 +210,8 @@ export function upstreamPathFor(pathname) {
  * @param {number} [options.maxAttempts]
  * @param {number} [options.headersTimeoutMs]
  * @param {string} [options.sessionId]
+ * @param {string|null} [options.authToken]
+ * @param {boolean} [options.requireAuth]
  */
 export function createProxyServer({
   upstreamBase = null,
@@ -208,6 +225,8 @@ export function createProxyServer({
   maxAttempts = 8,
   headersTimeoutMs = 120000,
   sessionId = `sess-${randomUUID()}`,
+  authToken = null,
+  requireAuth = false,
 }) {
   let startedAt = null
 
@@ -289,6 +308,14 @@ export function createProxyServer({
         'access-control-max-age': '600',
       })
       res.end()
+      return
+    }
+
+    if (requireAuth && presentedToken(req, url) !== authToken) {
+      writeJson(res, 401, errorPayload(
+        'UNAUTHORIZED',
+        'missing or invalid pool token — use the access token shown in the desktop app as the API key',
+      ))
       return
     }
 

@@ -19,6 +19,7 @@
 | 🌐 本地代理 | 四种协议原样转发：`/openai/v1`、`/anthropic`、`/google`；自动注入 Key 和 `x-opencode-session`，同请求内换号重试，SSE 流式透传 |
 | 🖱 托盘 + 快捷键 | 托盘菜单直接选账号；`Ctrl + Alt + O` 切到下一个可用账号；`Ctrl + Alt + Shift + O` 打开面板 |
 | 🔐 本地加密 | 密钥用 Windows DPAPI（Electron `safeStorage`）加密，只存本机；界面永远拿不到明文 |
+| 🔑 访问令牌 | 网关默认要求 `sk-pool-...` 令牌（作为客户端 API Key）；可重置/关闭，防止本机其他软件白嫖额度 |
 | 🪟 原生体验 | 关闭窗口隐藏到托盘、开机自启（安装版）、Windows 通知、单实例 |
 
 ## 安装
@@ -48,14 +49,19 @@ Chromium 的沙箱**不能在「以管理员身份运行」的进程里初始化
 
 ```text
 Base URL: http://127.0.0.1:8787/openai/v1
-API Key:  sk-pool
+API Key:  sk-pool-xxxxxxxx…   ← 桌面版「本地代理 → 令牌」里复制
 ```
+
+访问令牌默认开启：客户端必须把 API Key 填成这个令牌，网关校验通过后才替换成上游真 Key；令牌不对返回 401。可以在「切号策略」里关闭校验，或随时重置令牌。
 
 OpenAI SDK 示例：
 
 ```python
 from openai import OpenAI
-client = OpenAI(base_url="http://127.0.0.1:8787/openai/v1", api_key="sk-pool")
+client = OpenAI(
+    base_url="http://127.0.0.1:8787/openai/v1",
+    api_key="sk-pool-xxxxxxxx…",  # 访问令牌
+)
 ```
 
 Claude Code / Codex / ZCode / DSH 的完整配置见 **[docs/CONFIG.md](docs/CONFIG.md)**。

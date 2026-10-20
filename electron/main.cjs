@@ -396,7 +396,9 @@ async function runSmokeTest() {
     let health = null
     if (controller.proxyInfo.running) {
       try {
-        const response = await fetch(`http://127.0.0.1:${controller.proxyInfo.port}/pool/health`)
+        const response = await fetch(`http://127.0.0.1:${controller.proxyInfo.port}/pool/health`, {
+          headers: { 'X-Pool-Token': store.state.settings.proxyToken },
+        })
         health = await response.json()
       } catch (error) {
         health = { error: String((error && error.message) || error) }

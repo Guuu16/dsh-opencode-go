@@ -87,3 +87,19 @@ test('normalizeState drops malformed entries and repairs settings', () => {
   assert.equal(state.settings.usageRefreshMs, 5000)
   assert.equal(state.settings.proxyEnabled, true)
 })
+
+test('the gateway access token is generated, persisted and never short', () => {
+  const store = makeStore()
+  const token = store.state.settings.proxyToken
+  assert.match(token, /^sk-pool-[0-9a-f]{40}$/)
+  assert.equal(store.state.settings.proxyAuth, true)
+  store.save()
+
+  const reloaded = new Store({ file: store.file, ...crypto, scheme: 'plain', logger: { warn() {} } })
+  reloaded.load()
+  assert.equal(reloaded.state.settings.proxyToken, token)
+
+  const short = normalizeState({ settings: { proxyToken: 'short' } }).settings.proxyToken
+  assert.match(short, /^sk-pool-[0-9a-f]{40}$/)
+  assert.notEqual(short, token)
+})

@@ -295,7 +295,9 @@ function renderProxy() {
   $('#base-openai').value = bases.openai || '—'
   $('#base-anthropic').value = bases.anthropic || '—'
   $('#base-google').value = bases.google || '—'
+  $('#proxy-token').value = state.settings.proxyToken || '—'
   for (const button of document.querySelectorAll('[data-copy]')) button.disabled = !running
+  $('#regen-token').disabled = !running
   $('#proxy-toggle').textContent = running ? '停止代理' : '启动代理'
   const error = $('#proxy-error')
   if (state.proxy.error) {
@@ -319,6 +321,7 @@ function renderSettings() {
   setValue('#set-interval', String(settings.usageRefreshMs))
   setValue('#set-port', settings.proxyPort)
   $('#set-auto-invalid').checked = settings.autoMarkInvalid
+  $('#set-proxy-auth').checked = settings.proxyAuth !== false
   $('#set-login').checked = settings.launchAtLogin
   $('#set-tray').checked = settings.closeToTray
 }
@@ -559,6 +562,7 @@ function setupEvents() {
         switchAfterConsecutiveFailures: Number($('#set-consec').value),
         usageRefreshMs: Number($('#set-interval').value),
         proxyPort: Number($('#set-port').value),
+        proxyAuth: $('#set-proxy-auth').checked,
         launchAtLogin: $('#set-login').checked,
         closeToTray: $('#set-tray').checked,
         autoMarkInvalid: $('#set-auto-invalid').checked,
@@ -587,11 +591,25 @@ function setupEvents() {
   $('#proxy-card').addEventListener('click', async event => {
     const button = event.target.closest('[data-copy]')
     if (!button) return
-    const url = (state.proxy.bases || {})[button.dataset.copy]
-    if (!url) return
+    const kind = button.dataset.copy
+    const value = kind === 'token' ? state.settings.proxyToken : (state.proxy.bases || {})[kind]
+    if (!value) return
     try {
-      await api.copy(url)
-      toast('Base URL 已复制')
+      await api.copy(value)
+      toast(kind === 'token' ? '访问令牌已复制' : 'Base URL 已复制')
+    } catch (error) {
+      fail(error)
+    }
+  })
+
+  $('#regen-token').addEventListener('click', async () => {
+    if (!window.confirm('重置访问令牌？所有客户端都要改成新令牌。')) return
+    const bytes = new Uint8Array(20)
+    crypto.getRandomValues(bytes)
+    const token = 'sk-pool-' + Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')
+    try {
+      await api.updateSettings({ proxyToken: token })
+      toast('访问令牌已重置')
     } catch (error) {
       fail(error)
     }
@@ -619,7 +637,10 @@ function setupEvents() {
 
   $('#proxy-health').addEventListener('click', () => {
     if (!state.proxy.running) return fail(new Error('代理未启动'))
-    api.openExternal(`http://${state.proxy.host}:${state.proxy.port}/pool/health`).catch(fail)
+    const token = state.settings.proxyAuth !== false
+      ? `?token=${encodeURIComponent(state.settings.proxyToken || '')}`
+      : ''
+    api.openExternal(`http://${state.proxy.host}:${state.proxy.port}/pool/health${token}`).catch(fail)
   })
 
   $('#clear-logs').addEventListener('click', async () => {

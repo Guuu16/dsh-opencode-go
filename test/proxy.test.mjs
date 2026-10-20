@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import http from 'node:http'
 import { classifyResponse } from '../electron/core/failures.js'
-import { createProxyServer, gatewayHeaders, gatewayTarget, isLoopbackOrigin, upstreamPathFor } from '../electron/core/proxy.js'
+import { createProxyServer, gatewayHeaders, gatewayTarget, isLoopbackOrigin, presentedToken, upstreamPathFor } from '../electron/core/proxy.js'
 
 async function startUpstream(handler) {
   const server = http.createServer(handler)
@@ -236,6 +236,45 @@ test('a region-restricted model is not treated as an invalid credential', async 
   assert.equal(response.status, 403)
   assert.match(await response.text(), /unsupported_country_region_territory/)
   assert.equal(failures, 0, 'region errors must not rotate or invalidate the account')
+})
+
+test('gateway token is required when enabled', async t => {
+  const upstream = await startUpstream((req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end('{"ok":true}')
+  })
+  const token = 'sk-pool-test-token-123456'
+  const { proxy, info } = await startProxy({
+    upstreamBase: upstream.base,
+    resolveKey: async () => ({ id: 'one', label: '主号', secret: 'key' }),
+    onFailure: async () => null,
+    authToken: token,
+    requireAuth: true,
+  })
+  t.after(async () => { await proxy.stop(); await upstream.close() })
+
+  const base = `http://127.0.0.1:${info.port}`
+  assert.equal((await fetch(`${base}/openai/v1/chat/completions`, { method: 'POST', body: '{}' })).status, 401)
+  assert.equal((await fetch(`${base}/pool/health`)).status, 401)
+  assert.equal((await fetch(`${base}/pool/health?token=${token}`)).status, 200)
+  assert.equal((await fetch(`${base}/openai/v1/chat/completions`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}` },
+    body: '{}',
+  })).status, 200)
+  assert.equal((await fetch(`${base}/openai/v1/chat/completions`, {
+    method: 'POST',
+    headers: { 'x-pool-token': token },
+    body: '{}',
+  })).status, 200)
+})
+
+test('presentedToken accepts every client API-key field', () => {
+  const url = new URL('http://127.0.0.1/')
+  assert.equal(presentedToken({ headers: { authorization: 'Bearer abc' } }, url), 'abc')
+  assert.equal(presentedToken({ headers: { 'x-api-key': 'abc' } }, url), 'abc')
+  assert.equal(presentedToken({ headers: { 'x-goog-api-key': 'abc' } }, url), 'abc')
+  assert.equal(presentedToken({ headers: {} }, new URL('http://127.0.0.1/?key=abc')), 'abc')
 })
 
 test('a cross-origin preflight from a website is rejected', async t => {

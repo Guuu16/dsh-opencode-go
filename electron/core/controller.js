@@ -201,6 +201,8 @@ export class Controller extends EventEmitter {
     const beforePort = settings.proxyPort
     const beforeEnabled = settings.proxyEnabled
     const beforeRefresh = settings.usageRefreshMs
+    const beforeAuth = settings.proxyAuth
+    const beforeToken = settings.proxyToken
 
     if (patch.preemptAtPercent !== undefined) {
       const value = Number(patch.preemptAtPercent)
@@ -222,8 +224,13 @@ export class Controller extends EventEmitter {
       if (!Number.isFinite(value) || value < 1024 || value > 65535) throw new Error('代理端口必须在 1024–65535 之间')
       settings.proxyPort = Math.round(value)
     }
-    for (const key of ['proxyEnabled', 'launchAtLogin', 'closeToTray', 'autoMarkInvalid']) {
+    for (const key of ['proxyEnabled', 'proxyAuth', 'launchAtLogin', 'closeToTray', 'autoMarkInvalid']) {
       if (patch[key] !== undefined) settings[key] = patch[key] === true
+    }
+    if (patch.proxyToken !== undefined) {
+      const token = String(patch.proxyToken).trim()
+      if (token.length < 16) throw new Error('访问令牌至少 16 个字符')
+      settings.proxyToken = token
     }
     this.store.save()
     this.pushLog({ level: 'info', message: '设置已保存' })
@@ -232,7 +239,8 @@ export class Controller extends EventEmitter {
 
     const portChanged = settings.proxyPort !== beforePort
     const enabledChanged = settings.proxyEnabled !== beforeEnabled
-    if (enabledChanged || (portChanged && this.proxyInfo.running)) {
+    const authChanged = settings.proxyAuth !== beforeAuth || settings.proxyToken !== beforeToken
+    if (enabledChanged || authChanged || (portChanged && this.proxyInfo.running)) {
       this.restartProxy().catch(error => this.proxyFailed(error))
     }
     this.changed()
@@ -342,7 +350,8 @@ export class Controller extends EventEmitter {
       ? `http://${this.proxyInfo.host}:${this.proxyInfo.port}/inference/go/v1/models`
       : 'https://opencode.ai/inference/go/v1/models'
     const headers = { Accept: 'application/json' }
-    if (!this.proxyInfo.running) headers.Authorization = `Bearer ${this.store.secretOf(active.id)}`
+    if (this.proxyInfo.running) headers['X-Pool-Token'] = this.store.state.settings.proxyToken
+    else headers.Authorization = `Bearer ${this.store.secretOf(active.id)}`
     const response = await fetch(url, { headers, signal: AbortSignal.timeout(15000) })
     if (!response.ok) throw new Error(`models endpoint answered HTTP ${response.status}`)
     const body = await response.json()
@@ -385,6 +394,8 @@ export class Controller extends EventEmitter {
     const port = this.store.state.settings.proxyPort
     this.proxyError = null
     const proxy = createProxyServer({
+      authToken: this.store.state.settings.proxyToken,
+      requireAuth: this.store.state.settings.proxyAuth !== false,
       resolveKey: async () => {
         const account = this.pool.current()
         if (!account) return null

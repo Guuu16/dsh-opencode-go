@@ -8,7 +8,7 @@
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 
 export const DEFAULT_SETTINGS = Object.freeze({
   preemptAtPercent: 95,
@@ -16,10 +16,16 @@ export const DEFAULT_SETTINGS = Object.freeze({
   usageRefreshMs: 30000,
   proxyEnabled: true,
   proxyPort: 8787,
+  proxyAuth: true,
   launchAtLogin: false,
   closeToTray: true,
   autoMarkInvalid: true,
 })
+
+/** Local gateway access token. Shaped like an API key so every client accepts it. */
+export function newProxyToken() {
+  return `sk-pool-${randomBytes(20).toString('hex')}`
+}
 
 const STATES = new Set(['healthy', 'exhausted', 'invalid', 'disabled'])
 const ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,31}$/
@@ -40,7 +46,7 @@ export function defaultState() {
     version: 1,
     activeId: null,
     accounts: [],
-    settings: { ...DEFAULT_SETTINGS },
+    settings: { ...DEFAULT_SETTINGS, proxyToken: newProxyToken() },
     lastSwitch: null,
   }
 }
@@ -63,6 +69,10 @@ export function normalizeState(raw) {
     usageRefreshMs: clampNumber(settings.usageRefreshMs, 5000, 300000, DEFAULT_SETTINGS.usageRefreshMs),
     proxyEnabled: settings.proxyEnabled !== false,
     proxyPort: clampNumber(settings.proxyPort, 1024, 65535, DEFAULT_SETTINGS.proxyPort),
+    proxyAuth: settings.proxyAuth !== false,
+    proxyToken: typeof settings.proxyToken === 'string' && settings.proxyToken.length >= 16
+      ? settings.proxyToken
+      : newProxyToken(),
     launchAtLogin: settings.launchAtLogin === true,
     closeToTray: settings.closeToTray !== false,
     autoMarkInvalid: settings.autoMarkInvalid !== false,
@@ -148,6 +158,11 @@ export class Store {
       }
     }
     this.state = normalizeState(raw)
+    if (typeof raw?.settings?.proxyToken !== 'string' || raw.settings.proxyToken.length < 16) {
+      // Persist the freshly generated access token immediately: regenerating it
+      // on every launch would break every configured client.
+      this.save()
+    }
     return this.state
   }
 
